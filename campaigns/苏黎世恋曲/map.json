@@ -1,0 +1,71 @@
+{
+    "map_rooms": [
+        {
+            "id": 1, "map_id": 1,
+            "label": "中央车站",
+            "x": 400, "y": 40, "w": 140, "h": 80,
+            "description": "Zürich HB，苏黎世的交通枢纽。拱形大厅连接着班霍夫大街。",
+            "state": "explored", "color": "#1a2e40",
+            "node_id": 1, "floor": 1
+        },
+        {
+            "id": 2, "map_id": 1,
+            "label": "Café Odeon",
+            "x": 400, "y": 200, "w": 140, "h": 80,
+            "description": "贝尔维广场旁的百年咖啡馆。新艺术风格装潢，暖黄灯光，咖啡香气。",
+            "state": "unknown", "color": "#2d1f3e",
+            "node_id": 2, "floor": 1
+        },
+        {
+            "id": 3, "map_id": 1,
+            "label": "老城公寓",
+            "x": 160, "y": 200, "w": 140, "h": 80,
+            "description": "利马特河畔的四层老式建筑，你的房间在三楼。窗口朝向大教堂。",
+            "state": "unknown", "color": "#1e3a2f",
+            "node_id": 3, "floor": 1
+        },
+        {
+            "id": 4, "map_id": 1,
+            "label": "ETH主楼",
+            "x": 160, "y": 40, "w": 140, "h": 80,
+            "description": "山丘上的宏伟建筑，穹顶大厅可容纳数百人。露台可俯瞰全城。",
+            "state": "unknown", "color": "#1a2e40",
+            "node_id": 4, "floor": 1
+        },
+        {
+            "id": 5, "map_id": 1,
+            "label": "苏黎世湖畔",
+            "x": 640, "y": 200, "w": 140, "h": 80,
+            "description": "湖畔步道，梧桐叶铺地。天鹅、雪山、长椅——经典的苏黎世风景。",
+            "state": "unknown", "color": "#0f2a1e",
+            "node_id": 5, "floor": 1
+        },
+        {
+            "id": 6, "map_id": 1,
+            "label": "尼德道尔夫",
+            "x": 160, "y": 360, "w": 140, "h": 80,
+            "description": "老城最热闹的街区。鹅卵石巷子里密布酒吧、餐馆和古董店。",
+            "state": "unknown", "color": "#3a1e1e",
+            "node_id": 6, "floor": 1
+        },
+        {
+            "id": 7, "map_id": 1,
+            "label": "林登霍夫",
+            "x": 400, "y": 360, "w": 140, "h": 80,
+            "description": "老城最高点的菩提树公园。石墙边缘可俯瞰利马特河。日落时分极美。",
+            "state": "unknown", "color": "#1e3a2f",
+            "node_id": 7, "floor": 1
+        }
+    ],
+    "map_edges": [
+        {"id": 1, "map_id": 1, "from_id": 1, "to_id": 2, "label": "班霍夫大街·南", "locked": 0, "key_item": "", "edge_type": "normal"},
+        {"id": 2, "map_id": 1, "from_id": 1, "to_id": 4, "label": "Polybahn缆车", "locked": 0, "key_item": "", "edge_type": "normal"},
+        {"id": 3, "map_id": 1, "from_id": 2, "to_id": 3, "label": "老城小巷", "locked": 0, "key_item": "", "edge_type": "normal"},
+        {"id": 4, "map_id": 1, "from_id": 2, "to_id": 5, "label": "湖滨大道", "locked": 0, "key_item": "", "edge_type": "normal"},
+        {"id": 5, "map_id": 1, "from_id": 3, "to_id": 4, "label": "上坡路", "locked": 0, "key_item": "", "edge_type": "normal"},
+        {"id": 6, "map_id": 1, "from_id": 3, "to_id": 6, "label": "石板巷", "locked": 0, "key_item": "", "edge_type": "normal"},
+        {"id": 7, "map_id": 1, "from_id": 6, "to_id": 7, "label": "台阶小径", "locked": 0, "key_item": "", "edge_type": "normal"},
+        {"id": 8, "map_id": 1, "from_id": 7, "to_id": 2, "label": "下坡小路", "locked": 0, "key_item": "", "edge_type": "normal"},
+        {"id": 9, "map_id": 1, "from_id": 4, "to_id": 7, "label": "山丘步道", "locked": 0, "key_item": "", "edge_type": "normal"}
+    ]
+}

@@ -23,8 +23,8 @@ rpg_game.db-shm
 Z.R.I.C.log
 Z.R.I.C.log.*
 
-# 存档（用户数据，不应提交）；示例剧本除外
-campaigns/
+# 存档（用户数据）；示例剧本除外
+campaigns/*
 !campaigns/盘步山规则怪谈/
 !campaigns/苏黎世恋曲/
 
