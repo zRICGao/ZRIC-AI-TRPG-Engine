@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+
+# 环境
+.env
+.venv/
+venv/
+env/
+
+# 数据库（运行时生成）
+rpg_game.db
+rpg_game.db-wal
+rpg_game.db-shm
+
+# 日志
+Z.R.I.C.log
+Z.R.I.C.log.*
+
+# 存档（用户数据，不应提交）；示例剧本除外
+campaigns/
+!campaigns/盘步山规则怪谈/
+!campaigns/苏黎世恋曲/
+
+# 备份 / 草稿文件
+*副本*
+*（test）*
+
+# 工作日志（开发笔记，按需决定是否提交）
+工作日志/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db

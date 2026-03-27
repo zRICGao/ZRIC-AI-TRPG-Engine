@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>投屏端 · RPG 跑团</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=ZCOOL+XiaoWei&display=swap');
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            background: #0a0a0f;
+            color: #e8e0d0;
+            font-family: 'ZCOOL XiaoWei', 'STKaiti', 'SimSun', serif;
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        /* 星空背景 */
+        body::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            background:
+                radial-gradient(ellipse at 20% 50%, rgba(30,20,60,0.6) 0%, transparent 60%),
+                radial-gradient(ellipse at 80% 20%, rgba(10,30,50,0.5) 0%, transparent 50%),
+                radial-gradient(ellipse at 60% 80%, rgba(40,10,30,0.4) 0%, transparent 50%);
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        #app { position: relative; z-index: 1; }
+
+        /* 左侧场景主区域 */
+        .scene-main {
+            position: relative;
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            padding: 2rem 2.5rem;
+            gap: 1.5rem;
+        }
+
+        /* 场景图片：独立展示，保留原图细节 */
+        .scene-hero-image {
+            width: 100%;
+            max-height: 50vh;
+            object-fit: cover;
+            border-radius: 12px;
+            filter: brightness(0.85) contrast(1.05);
+            box-shadow: 0 4px 40px rgba(0,0,0,0.6), 0 0 80px rgba(100,70,200,0.08);
+            transition: opacity 0.8s ease;
+        }
+
+        /* 文字阅读板块：独立卡片，与图片视觉分离 */
+        .scene-text-card {
+            background: rgba(12,12,18,0.92);
+            border: 1px solid rgba(200,170,100,0.12);
+            border-radius: 14px;
+            padding: 2rem 2.2rem;
+            backdrop-filter: blur(12px);
+            box-shadow: 0 2px 20px rgba(0,0,0,0.4);
+        }
+
+        /* 场景文字区 */
+        .scene-text {
+            line-height: 2;
+            font-size: 1.15rem;
+            letter-spacing: 0.05em;
+            text-shadow: 0 1px 4px rgba(0,0,0,0.5);
+            color: #e0d8c8;
+        white-space: pre-wrap; /* 【新增】：保留 AI 生成文本的换行符和空格 */
+        }
+
+        /* 选项卡片 */
+        .option-card {
+            border: 1px solid rgba(150,120,80,0.3);
+            background: rgba(30,25,20,0.6);
+            backdrop-filter: blur(8px);
+            border-radius: 10px;
+            padding: 14px 20px;
+            font-size: 1rem;
+            letter-spacing: 0.04em;
+            color: #c8b890;
+            transition: all 0.3s;
+        }
+        .option-card:hover { border-color: rgba(200,180,120,0.5); background: rgba(50,40,30,0.7); }
+
+        /* 角色状态条 */
+        .stat-bar-bg { background: rgba(255,255,255,0.1); border-radius: 4px; height: 6px; overflow: hidden; }
+        .stat-bar-fill { height: 100%; border-radius: 4px; transition: width 0.6s ease; }
+
+        /* 标题装饰 */
+        .scene-title {
+            font-size: 2rem;
+            font-weight: 900;
+            letter-spacing: 0.12em;
+            text-shadow: 0 0 30px rgba(200,170,100,0.4), 0 2px 8px rgba(0,0,0,0.9);
+            color: #f0dfa0;
+        }
+
+        /* 装饰分割线 */
+        .deco-line {
+            height: 1px;
+            background: linear-gradient(to right, transparent, rgba(200,170,100,0.5), transparent);
+            margin: 1.5rem 0;
+        }
+
+        /* 淡入动画 */
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+        .fade-in { animation: fadeInUp 0.7s ease forwards; }
+
+        /* 连接失败遮罩 */
+        .offline-mask {
+            position: fixed; inset: 0; z-index: 100;
+            background: rgba(0,0,0,0.9);
+            display: flex; align-items: center; justify-content: center;
+            flex-direction: column; gap: 1rem;
+        }
+
+        /* 角色血条颜色 */
+        .hp-bar  { background: linear-gradient(to right, #ef4444, #f87171); }
+        .san-bar { background: linear-gradient(to right, #eab308, #fde047); }
+
+        /* BGM 音符跳动 */
+        @keyframes bounce1 { 0%,100%{height:6px} 50%{height:18px} }
+        @keyframes bounce2 { 0%,100%{height:12px} 50%{height:6px} }
+        @keyframes bounce3 { 0%,100%{height:8px} 50%{height:16px} }
+        .bar1 { animation: bounce1 0.8s ease-in-out infinite; }
+        .bar2 { animation: bounce2 0.9s ease-in-out infinite; }
+        .bar3 { animation: bounce3 0.7s ease-in-out infinite; }
+    </style>
+</head>
+<body>
+<div id="app">
+
+    <!-- 离线遮罩 -->
+    <div v-if="!connected" class="offline-mask">
+        <div class="text-5xl">🔴</div>
+        <div class="text-2xl font-bold text-gray-300">等待 GM 引擎连接...</div>
+        <div class="text-gray-500 text-sm">正在尝试连接 {{ API_BASE_URL }}</div>
+        <div class="flex gap-1 mt-2">
+            <div class="w-2 h-2 rounded-full bg-gray-600 animate-bounce" style="animation-delay:0s"></div>
+            <div class="w-2 h-2 rounded-full bg-gray-600 animate-bounce" style="animation-delay:.2s"></div>
+            <div class="w-2 h-2 rounded-full bg-gray-600 animate-bounce" style="animation-delay:.4s"></div>
+        </div>
+        <div class="text-gray-600 text-xs mt-4 max-w-md text-center leading-relaxed">
+            <span v-if="wsConnected === false && connectAttempts > 2">
+                WebSocket 重连中（第 {{ connectAttempts }} 次）...<br>
+            </span>
+            提示：请确保 NEXUS 引擎已启动，建议通过
+            <a href="http://localhost:8000/player.html" class="text-amber-600 underline">http://localhost:8000/player.html</a>
+            访问此页面
+        </div>
+    </div>
+
+    <!-- 主界面 -->
+    <div v-if="connected && currentScene" class="min-h-screen flex flex-col lg:flex-row">
+
+        <!-- 左侧：场景主展示区 -->
+        <div class="scene-main lg:w-2/3">
+
+            <!-- 场景标题 -->
+            <div class="fade-in">
+                <div class="text-xs text-amber-600 tracking-widest uppercase mb-2 font-bold">📍 当前场景</div>
+                <h1 class="scene-title">{{ currentScene.name }}</h1>
+            </div>
+
+            <!-- 场景图片（独立展示） -->
+            <div v-if="sceneImage" class="fade-in">
+                <img :src="sceneImage" alt="场景插图" class="scene-hero-image" @error="sceneImage=null">
+            </div>
+
+            <!-- 文字阅读板块（独立卡片） -->
+            <div class="scene-text-card fade-in" style="animation-delay:.1s">
+                <div class="scene-text">{{ currentScene.content }}</div>
+
+                <!-- 选项列表（内嵌在文字卡片底部） -->
+                <div v-if="currentScene.options && currentScene.options.length" class="mt-6 pt-5" style="border-top:1px solid rgba(200,170,100,0.12)">
+                    <div class="text-xs text-gray-500 tracking-widest uppercase font-bold mb-3">⚔️ 可选行动</div>
+                    <div class="space-y-3">
+                        <div v-for="(opt, i) in currentScene.options.filter(o => !o._trigger)" :key="i" class="option-card">
+                            <span class="text-amber-600 font-bold mr-3">{{ ['Ⅰ','Ⅱ','Ⅲ','Ⅳ','Ⅴ','Ⅵ'][i] || (i+1) }}</span>
+                            {{ opt.text }}
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- 右侧边栏 (1/3) -->
+        <div class="lg:w-80 flex-shrink-0 p-6 lg:p-8 flex flex-col gap-6 border-t lg:border-t-0 lg:border-l border-gray-800/60">
+
+            <!-- BGM 状态 -->
+            <div class="bg-gray-900/60 rounded-xl p-4 border border-gray-800/80 backdrop-blur-sm">
+                <div class="flex items-center gap-3 mb-1">
+                    <!-- 音符跳动动画 -->
+                    <div v-if="bgmPlaying" class="flex items-end gap-0.5 h-5">
+                        <div class="w-1 rounded-sm bg-amber-500 bar1"></div>
+                        <div class="w-1 rounded-sm bg-amber-400 bar2"></div>
+                        <div class="w-1 rounded-sm bg-amber-500 bar3"></div>
+                    </div>
+                    <span v-else class="text-gray-500 text-lg">🎵</span>
+                    <span class="text-amber-400 text-sm font-bold tracking-wide truncate">{{ bgmName || '无背景音乐' }}</span>
+                </div>
+            </div>
+
+            <!-- 角色面板 -->
+            <div>
+                <div class="text-xs text-gray-500 tracking-widest uppercase font-bold mb-3">👥 冒险者</div>
+                <div class="space-y-4">
+                    <div v-for="char in pcChars" :key="char.id"
+                        class="bg-gray-900/70 border border-gray-800/80 rounded-xl p-4 backdrop-blur-sm">
+                        <div class="flex items-center justify-between mb-3">
+                            <div>
+                                <span class="text-white font-bold text-base">{{ char.name }}</span>
+                                <span class="text-xs text-gray-500 ml-2">PC</span>
+                            </div>
+                        </div>
+                        <!-- HP -->
+                        <div class="mb-2">
+                            <div class="flex justify-between text-xs mb-1">
+                                <span class="text-red-400 font-bold">❤️ HP</span>
+                                <span class="text-red-300 font-bold">{{ char.hp }}</span>
+                            </div>
+                            <div class="stat-bar-bg">
+                                <div class="stat-bar-fill hp-bar" :style="{width: Math.min(100, char.hp) + '%'}"></div>
+                            </div>
+                        </div>
+                        <!-- SAN -->
+                        <div class="mb-3">
+                            <div class="flex justify-between text-xs mb-1">
+                                <span class="text-yellow-400 font-bold">🧠 SAN</span>
+                                <span class="text-yellow-300 font-bold">{{ char.san }}</span>
+                            </div>
+                            <div class="stat-bar-bg">
+                                <div class="stat-bar-fill san-bar" :style="{width: Math.min(100, char.san) + '%'}"></div>
+                            </div>
+                        </div>
+                        <!-- 物品 -->
+                        <div v-if="char.inventory" class="text-xs text-gray-400 leading-relaxed">
+                            <span class="text-gray-600">🎒</span> {{ char.inventory }}
+                        </div>
+                    </div>
+
+                    <div v-if="!pcChars.length" class="text-gray-600 text-sm text-center py-4">
+                        暂无角色数据
+                    </div>
+                </div>
+            </div>
+
+            <!-- NPC 列表（折叠显示） -->
+            <div v-if="npcChars.length">
+                <div class="text-xs text-gray-500 tracking-widest uppercase font-bold mb-3">🎭 当前相关 NPC</div>
+                <div class="space-y-2">
+                    <div v-for="npc in npcChars" :key="npc.id"
+                        class="bg-amber-950/40 border border-amber-900/40 rounded-lg p-3">
+                        <div class="flex justify-between items-center">
+                            <span class="text-amber-300 font-bold text-sm">{{ npc.name }}</span>
+                            <span class="text-xs text-gray-500">HP {{ npc.hp }} / SAN {{ npc.san }}</span>
+                        </div>
+                        <div v-if="npc.inventory" class="text-xs text-amber-700 mt-1 truncate">{{ npc.inventory }}</div>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <!-- 等待场景 -->
+    <div v-if="connected && !currentScene" class="min-h-screen flex flex-col items-center justify-center gap-6 text-center p-8">
+        <div class="text-7xl opacity-40">🗺️</div>
+        <div class="text-2xl font-bold text-gray-600 tracking-widest">等待 GM 选择场景...</div>
+    </div>
+
+    <!-- 隐藏音频 -->
+    <audio ref="audioRef" loop></audio>
+
+</div>
+
+<script>
+const { createApp, ref, computed, onMounted, onUnmounted, watch } = Vue;
+
+const API_BASE_URL = "http://localhost:8000";
+const WS_URL = API_BASE_URL.replace(/^http/, 'ws') + "/ws/player";
+const FALLBACK_POLL_INTERVAL = 5000; // WebSocket 断开时降级为 5 秒轮询
+
+createApp({
+    setup() {
+        const connected    = ref(false);
+        const characters   = ref([]);
+        const storyNodes   = ref([]);
+        const currentScene = ref(null);
+        const sceneImage   = ref(null);
+        const bgmName      = ref('');
+        const bgmUrl       = ref('');
+        const bgmPlaying   = ref(false);
+        const audioRef     = ref(null);
+        const wsConnected  = ref(false);
+        const connectAttempts = ref(0);
+
+        let lastSceneId    = null;
+        let lastBgmUrl     = null;
+        let ws             = null;
+        let reconnectTimer = null;
+        let pollTimer      = null;
+        let reconnectDelay = 1000; // 指数退避起始值
+
+        const pcChars  = computed(() => characters.value.filter(c => c.role === 'PC'));
+        const npcChars = computed(() => characters.value.filter(c => c.role === 'NPC'));
+
+        // ── 处理来自 WebSocket 或 REST 的状态数据 ──
+        const applyState = (data) => {
+            // 角色数据
+            if (data.characters) {
+                characters.value = data.characters;
+            }
+            // 当前场景
+            const sceneId = data.current_scene_id;
+            if (sceneId) {
+                // WebSocket 推送包含完整场景数据
+                if (data.current_scene) {
+                    const contentChanged = !currentScene.value || 
+                                           currentScene.value.content !== data.current_scene.content;
+                    
+                    if (lastSceneId !== sceneId || contentChanged) {
+                        lastSceneId = sceneId;
+                        currentScene.value = data.current_scene;
+                        sceneImage.value = data.scene_image || null;
+                    }
+                } else {
+                    // REST 兜底：从 storyNodes 查找
+                    const found = storyNodes.value.find(n => n.id === sceneId);
+                    if (found) {
+                        const contentChanged = !currentScene.value || 
+                                               currentScene.value.content !== found.content;
+                        
+                        if (lastSceneId !== sceneId || contentChanged) {
+                            lastSceneId = sceneId;
+                            currentScene.value = found;
+                            sceneImage.value = data.scene_image || null;
+                        }
+                    }
+                }
+            } else {
+                currentScene.value = null;
+                lastSceneId = null;
+            }
+
+            // BGM
+            const newBgmUrl  = data.bgm_url  || '';
+            const newBgmName = data.bgm_name || '';
+            if (newBgmUrl !== lastBgmUrl) {
+                lastBgmUrl = newBgmUrl;
+                bgmUrl.value  = newBgmUrl;
+                bgmName.value = newBgmName;
+                if (audioRef.value) {
+                    audioRef.value.src = newBgmUrl;
+                    if (newBgmUrl) {
+                        audioRef.value.play().then(() => { bgmPlaying.value = true; }).catch(() => {});
+                    } else {
+                        audioRef.value.pause();
+                        bgmPlaying.value = false;
+                    }
+                }
+            }
+
+            connected.value = true;
+        };
+
+        // ── WebSocket 连接管理 ──
+        const connectWs = () => {
+            if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) {
+                return; // 已有连接
+            }
+            try {
+                ws = new WebSocket(WS_URL);
+
+                ws.onopen = () => {
+                    wsConnected.value = true;
+                    connectAttempts.value = 0;
+                    reconnectDelay = 1000;
+                    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+                    console.log('[投屏] WebSocket 已连接');
+                };
+
+                ws.onmessage = (event) => {
+                    try {
+                        const data = JSON.parse(event.data);
+                        if (data.type === 'ping') return;
+                        if (data.type === 'state_update') {
+                            applyState(data);
+                        }
+                    } catch (e) {
+                        console.warn('[投屏] WebSocket 消息解析失败', e);
+                    }
+                };
+
+                ws.onclose = () => {
+                    wsConnected.value = false;
+                    connectAttempts.value++;
+                    console.log('[投屏] WebSocket 断开，' + (reconnectDelay/1000) + '秒后重连...');
+                    // 断开后启动降级轮询
+                    if (!pollTimer) {
+                        pollTimer = setInterval(pollFallback, FALLBACK_POLL_INTERVAL);
+                    }
+                    // 指数退避重连
+                    reconnectTimer = setTimeout(() => {
+                        reconnectDelay = Math.min(reconnectDelay * 2, 30000);
+                        connectWs();
+                    }, reconnectDelay);
+                };
+
+                ws.onerror = () => {
+                    // onerror 后会自动触发 onclose，无需额外处理
+                };
+            } catch (e) {
+                console.warn('[投屏] WebSocket 创建失败', e);
+                // 降级轮询
+                if (!pollTimer) {
+                    pollTimer = setInterval(pollFallback, FALLBACK_POLL_INTERVAL);
+                }
+            }
+        };
+
+        // ── REST 降级轮询（WebSocket 断开时使用）──
+        const pollFallback = async () => {
+            try {
+                const [stateRes, playerStateRes] = await Promise.all([
+                    fetch(`${API_BASE_URL}/api/game/state`),
+                    fetch(`${API_BASE_URL}/api/player/state`),
+                ]);
+                if (!stateRes.ok) throw new Error('state failed');
+
+                const stateData  = await stateRes.json();
+                storyNodes.value = stateData.nodes || [];
+
+                if (playerStateRes.ok) {
+                    const ps = await playerStateRes.json();
+                    applyState({ ...ps, characters: stateData.characters || [] });
+                }
+            } catch (e) {
+                connected.value = false;
+            }
+        };
+
+        onMounted(() => {
+            // 先做一次 REST 请求获取初始状态（确保页面不空白）
+            pollFallback();
+            // 然后建立 WebSocket 连接
+            connectWs();
+
+            if (audioRef.value) {
+                audioRef.value.volume = 0.5;
+                audioRef.value.addEventListener('ended',  () => { bgmPlaying.value = false; });
+                audioRef.value.addEventListener('playing', () => { bgmPlaying.value = true; });
+                audioRef.value.addEventListener('pause',   () => { bgmPlaying.value = false; });
+            }
+        });
+
+        onUnmounted(() => {
+            if (pollTimer) clearInterval(pollTimer);
+            if (reconnectTimer) clearTimeout(reconnectTimer);
+            if (ws) ws.close();
+        });
+
+        return {
+            API_BASE_URL, connected, wsConnected, connectAttempts,
+            currentScene, sceneImage,
+            pcChars, npcChars, bgmName, bgmPlaying, audioRef
+        };
+    }
+}).mount('#app');
+</script>
+</body>
+</html>
