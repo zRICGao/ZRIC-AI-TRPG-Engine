@@ -9,6 +9,7 @@ build/
 
 # 环境
 .env
+persona_mode.json
 .venv/
 venv/
 env/
