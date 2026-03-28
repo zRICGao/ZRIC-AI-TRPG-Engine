@@ -11,7 +11,6 @@ DM在环的半自动文字冒险推演模拟器。AI 实时生成多分支剧情
 ## 🧠Why Z.R.I.C
 
 全称为 **Z**ero-boundary **R**oleplay **I**ntelligence **C**ore, 中文名零界核心。发音大概是Z-ric.
-（其实是ZURICH的变体。
 
 ## 💡它能做什么
 
