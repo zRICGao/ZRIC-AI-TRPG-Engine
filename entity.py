@@ -5,6 +5,7 @@ Z.R.I.C 引擎 — 世界实体注册表模块 (entity.py)
 """
 
 import json
+import json_repair
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime
@@ -214,10 +215,10 @@ def ai_extract_and_upsert_entities(
                 {"role": "user",   "content": prompt_user},
             ],
             temperature=0.1,
-            max_tokens=500,
+            max_tokens=1000,
             response_format={"type": "json_object"},
         )
-        parsed   = json.loads(resp.choices[0].message.content)
+        parsed   = json_repair.loads(resp.choices[0].message.content)
         entities = parsed.get("entities", [])
         if not isinstance(entities, list):
             return

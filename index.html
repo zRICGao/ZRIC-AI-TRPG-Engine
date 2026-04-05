@@ -130,6 +130,7 @@ body { font-family: "Noto Sans SC", sans-serif; background:#090b10; color:#c9cdd
     font-family:"Noto Sans SC",sans-serif;
 }
 .option-btn:hover { border-color:rgba(232,180,75,.4); background:rgba(232,180,75,.08); color:#f0dea0; transform:translateY(-1px); box-shadow:0 4px 12px rgba(0,0,0,0.2); }
+.option-btn.fate-highlight { border-color:rgba(167,139,250,.8); background:rgba(167,139,250,.12); color:#e9d5ff; box-shadow:0 0 12px rgba(167,139,250,.35); transform:translateY(-1px); }
 .option-btn .opt-num { font-family:"JetBrains Mono",monospace; font-size:12px; color:#e8b44b; min-width:20px; font-weight: 600;}
 .option-btn .del-btn { margin-left:auto; opacity:0; color:#e05c5c; font-size:14px; border-radius:4px; padding:4px; }
 .option-btn:hover .del-btn { opacity:1; }
@@ -168,15 +169,6 @@ body { font-family: "Noto Sans SC", sans-serif; background:#090b10; color:#c9cdd
     white-space: pre-line; word-break: break-all;
 }
 
-/* ── 骰子按钮 ── */
-.dice-btn {
-    background:#0b0e17; border:1px solid rgba(255,255,255,.08);
-    border-radius:4px; color:#9ca3af; padding:6px 0; font-size:13px;
-    font-family:"JetBrains Mono",monospace; font-weight:600; cursor:pointer;
-    transition:all .12s; text-align:center;
-}
-.dice-btn:hover { border-color:rgba(232,180,75,.4); color:#e8b44b; background:rgba(232,180,75,.06); }
-.dice-btn:active { transform:scale(.92); }
 
 /* ── 标签页 ── */
 .tab-pill {
@@ -723,6 +715,14 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:14px; h
                                     <option value="lyrical">抒情</option>
                                     <option value="creepy">阴森</option>
                                 </select>
+                                <select v-model.number="ttsRate" class="inp" style="width:66px;font-size:11px;padding:4px 6px;height:28px" title="播放倍速">
+                                    <option :value="0.5">0.5×</option>
+                                    <option :value="0.75">0.75×</option>
+                                    <option :value="1.0">1×</option>
+                                    <option :value="1.25">1.25×</option>
+                                    <option :value="1.5">1.5×</option>
+                                    <option :value="2.0">2×</option>
+                                </select>
                             </div>
                             <!-- 流式展开中：显示打字机效果 -->
                             <div v-if="isExpandingBranch" style="position:relative">
@@ -732,7 +732,9 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:14px; h
                                     <span style="font-size:12px;color:#e8b44b">场景叙事生成中…</span>
                                 </div>
                             </div>
-                            <!-- 正常显示 -->
+                            <!-- 有扩写内容：显示扩写版本 -->
+                            <p v-else-if="currentNode.expanded_content" class="scene-content" style="font-size:17px">{{ currentNode.expanded_content }}</p>
+                            <!-- 无扩写：显示原始骨架/手动编写的内容 -->
                             <p v-else class="scene-content" style="font-size:17px">{{ currentNode.content }}</p>
                         </div>
 
@@ -816,11 +818,12 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:14px; h
                             <span v-if="!currentNode.options?.length" style="font-size:12px;color:#4b5563">此场景为分支终点</span>
                         </div>
                         <div v-if="currentNode.options?.length">
-                            <div v-for="(opt,i) in currentNode.options" :key="opt.id" 
-                                 class="option-btn"
-                                 @click="!isEditMode && jumpToNode(opt.next_node_id, opt.text)">
+                            <div v-for="(opt,i) in currentNode.options" :key="opt.id"
+                                 class="option-btn" :class="{'fate-highlight': fateHighlightIdx === i}"
+                                 @click="!isEditMode && !fateSpinning && jumpToNode(opt.next_node_id, opt.text)">
                                 <span class="opt-num">{{ String(i+1).padStart(2,'0') }}</span>
                                 <span style="flex:1">{{ opt.text }}</span>
+                                <span v-if="optionLikelihoods[opt.next_node_id] && !isEditMode" style="font-size:10px;color:#6b7280;font-style:italic;font-family:'JetBrains Mono';flex-shrink:0;margin-left:6px">{{ optionLikelihoods[opt.next_node_id] }}</span>
                                 <span v-if="isEditMode" style="font-size:11px;color:#4b5563;font-family:'JetBrains Mono'">→#{{ opt.next_node_id }}</span>
                                 <button v-if="isEditMode" @click.stop="deleteOption(opt.id)" class="del-btn" style="background:transparent;border:none;cursor:pointer;font-size:14px">
                                     <i class="ph ph-x"></i>
@@ -888,27 +891,6 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:14px; h
                             </button>
                         </div>
 
-                        <!-- GM 干预 / 纠正推演 -->
-                        <div v-if="lastDynamicContext && !isGeneratingOptions" style="margin-top:12px;padding:12px 14px;background:rgba(167,139,250,.04);border:1px solid rgba(167,139,250,.15);border-radius:8px">
-                            <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px">
-                                <i class="ph ph-pencil-line" style="font-size:13px;color:#a78bfa"></i>
-                                <span style="font-size:12px;font-weight:600;color:#a78bfa;letter-spacing:.02em">GM 干预</span>
-                                <span style="font-size:10px;color:#4b5563;margin-left:4px">对上次推演结果不满意？输入纠正指令让 AI 重新推演</span>
-                            </div>
-                            <div style="display:flex;gap:8px">
-                                <input v-model="gmCorrection" @keyup.enter="retryWithCorrection" type="text"
-                                       placeholder="例：艾琳不会这么快答应，她应该更犹豫；玩家HP不足不应该成功跑掉…"
-                                       class="inp" style="flex:1;font-size:13px;border-color:rgba(167,139,250,.2)">
-                                <button @click="retryWithCorrection" :disabled="isGeneratingOptions||!gmCorrection.trim()" class="btn btn-sm"
-                                        style="flex-shrink:0;background:rgba(167,139,250,.1);border-color:rgba(167,139,250,.3);color:#a78bfa">
-                                    <i :class="isGeneratingOptions?'ph ph-circle-notch':'ph ph-arrow-counter-clockwise'" :style="isGeneratingOptions?'animation:spin 1s linear infinite':''"></i>
-                                    重新推演
-                                </button>
-                            </div>
-                            <div v-if="lastDynamicContext.action" style="margin-top:6px;font-size:11px;color:#4b5563">
-                                上次推演：「{{ lastDynamicContext.action }}」 → {{ lastDynamicContext.branchCount }} 个分支
-                            </div>
-                        </div>
                     </div>
                 </div>
             </template>
@@ -1043,66 +1025,58 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:14px; h
                 </div>
             </div>
 
-            <!-- 骰子 & 检定面板 -->
-            <div style="border-top:1px solid rgba(255,255,255,.06);flex-shrink:0;height:300px;display:flex;flex-direction:column;background:#0b0e17;padding:12px">
-                <div style="display:flex;background:#090b10;border:1px solid rgba(255,255,255,.07);border-radius:6px;padding:4px;gap:4px;margin-bottom:10px">
-                    <span @click="diceTab='roller'" class="tab-pill" :class="diceTab==='roller'?'active':''" style="flex:1;text-align:center">基础掷骰</span>
-                    <span @click="diceTab='check'" class="tab-pill" :class="diceTab==='check'?'active':''" style="flex:1;text-align:center">属性检定</span>
+            <!-- 叙事控制台 -->
+            <div style="border-top:1px solid rgba(255,255,255,.06);flex-shrink:0;display:flex;flex-direction:column;background:#0b0e17;padding:12px;gap:10px">
+                <div style="font-size:11px;font-weight:600;letter-spacing:.06em;color:#6b7280;text-transform:uppercase">🎭 叙事控制台</div>
+
+                <!-- 1. 氛围预设 -->
+                <select v-model="narrativeMood" class="inp" style="font-size:12px">
+                    <option value="">— 氛围预设（默认）—</option>
+                    <option value="日常">日常</option>
+                    <option value="紧张">紧张</option>
+                    <option value="恐怖">恐怖</option>
+                    <option value="温馨">温馨</option>
+                    <option value="悲伤">悲伤</option>
+                    <option value="史诗">史诗</option>
+                </select>
+
+                <!-- 2. 时间快进 -->
+                <div style="display:flex;gap:6px">
+                    <input v-model="timeSkipInput" class="inp" style="flex:1;font-size:12px" placeholder="跳到下一个早晨 / 三天后">
+                    <button @click="doTimeSkip" :disabled="!timeSkipInput.trim()||isGeneratingOptions" class="btn btn-ghost btn-sm" style="flex-shrink:0;font-size:12px">
+                        <i class="ph ph-fast-forward"></i> 快进
+                    </button>
                 </div>
 
-                <!-- 普通骰子 -->
-                <template v-if="diceTab==='roller'">
-                    <div style="flex:1;overflow-y:auto;background:#090b10;border:1px solid rgba(255,255,255,.06);border-radius:6px;padding:8px;margin-bottom:8px">
-                        <div v-for="(log,i) in diceLog" :key="i" style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid rgba(255,255,255,.04);font-family:'JetBrains Mono';font-size:12px">
-                            <span style="color:#4b5563">{{ log.time.slice(0,5) }} D{{ log.sides }}<span v-if="log.mod!==0" :style="{color:log.mod>0?'#4fc98a':'#e05c5c'}">{{ log.mod>0?'+':'' }}{{ log.mod }}</span></span>
-                            <span :style="{color:log.result===1?'#e05c5c':log.final===log.sides+log.mod?'#e8b44b':'#4fc98a',fontWeight:700}">{{ log.final }}</span>
-                        </div>
-                        <div v-if="!diceLog.length" style="text-align:center;color:#374151;font-size:12px;padding:24px 0">等待命运的指引…</div>
-                    </div>
-                    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-                        <span style="font-family:'JetBrains Mono';font-size:11px;color:#4b5563;letter-spacing:.04em;font-weight:600">MOD</span>
-                        <input type="number" v-model="diceModifier" class="inp inp-mono" style="width:70px;padding:6px 8px;text-align:center">
-                        <button @click="diceLog=[]" class="btn btn-ghost btn-sm" style="margin-left:auto">清空记录</button>
-                    </div>
-                    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px">
-                        <button v-for="d in [4,6,8,10,12,20,100]" :key="d" @click="rollDice(d)" class="dice-btn">d{{ d }}</button>
-                    </div>
-                </template>
-
-                <!-- 属性检定 -->
-                <template v-else>
-                    <div style="display:flex;flex-direction:column;gap:8px;flex:1;overflow-y:auto">
-                        <select v-model="checkChar" class="inp">
-                            <option value="" disabled>-- 指定角色 --</option>
-                            <option v-for="c in characters" :key="c.id" :value="c">{{ c.name }}</option>
-                        </select>
-
-                        <div style="display:grid;grid-template-columns:1fr 1fr 28px 1fr 1fr;gap:4px;align-items:center">
-                            <button v-for="d in checkDiceOptions.filter(x=>x.sides===20||x.sides===100)" :key="d.sides"
-                                    @click="checkDiceSides=d.sides"
-                                    class="dice-btn" :style="{borderColor:checkDiceSides===d.sides?'rgba(232,180,75,.5)':'',color:checkDiceSides===d.sides?'#e8b44b':'',gridColumn:'span 2'}">
-                                d{{ d.sides }}
-                            </button>
-                            <span style="font-size:10px;color:#4b5563;font-family:'JetBrains Mono';text-align:center;font-weight:600">VS</span>
-                            <button v-for="attr in ['HP','SAN']" :key="attr" @click="checkAttr=attr"
-                                    class="dice-btn" :style="{borderColor:checkAttr===attr?'rgba(232,180,75,.5)':'',color:checkAttr===attr?'#e8b44b':''}">
-                                {{ attr }}
-                            </button>
-                        </div>
-
-                        <div v-if="checkResult" class="check-result-card" :style="{borderColor:checkResult.success?'rgba(79,201,138,.3)':'rgba(224,92,92,.3)',background:checkResult.success?'rgba(79,201,138,.05)':'rgba(224,92,92,.05)'}">
-                            <div style="font-family:'JetBrains Mono';font-size:16px;font-weight:700;letter-spacing:.06em;margin-bottom:4px" :style="{color:checkResult.success?'#4fc98a':'#e05c5c'}">{{ checkResult.success?'成功':'失败' }}</div>
-                            <div style="font-size:13px;color:#9ca3af;font-family:'JetBrains Mono'">{{ checkResult.roll }} / {{ checkResult.target }}</div>
-                            <div v-if="checkResult.critical" style="font-size:11px;color:#e8b44b;letter-spacing:.04em;margin-top:4px;font-weight:600">{{ checkResult.label }}</div>
-                        </div>
-                        <div v-else style="display:flex;align-items:center;justify-content:center;flex:1;border:1px dashed rgba(255,255,255,.06);border-radius:6px">
-                            <span style="font-family:'JetBrains Mono';font-size:12px;color:#4b5563">检定目标值 ≤ {{ checkTargetDisplay }}</span>
-                        </div>
-                    </div>
-                    <button @click="doCheck" :disabled="!checkChar||!checkAttr" class="btn btn-accent" style="width:100%;margin-top:10px">
-                        进行检定
+                <!-- 3. 叙事推力 + 5. 命运抉择 -->
+                <div style="display:flex;gap:6px">
+                    <button @click="doForceThrust" :disabled="isGeneratingOptions||!currentNode" class="btn btn-ghost btn-sm" style="flex:1;font-size:12px;border-color:rgba(232,180,75,.25);color:#e8b44b">
+                        <i class="ph-fill ph-lightning"></i> 推动剧情
                     </button>
-                </template>
+                    <button @click="fatePick" :disabled="!Object.keys(optionLikelihoods).length || fateSpinning" class="btn btn-ghost btn-sm" style="flex:1;font-size:12px;border-color:rgba(139,92,246,.25);color:#a78bfa">
+                        <span v-if="fateSpinning" style="animation:spin .6s linear infinite;display:inline-block">🎲</span>
+                        <span v-else>🎲</span> {{ fateSpinning ? '命运裁决中…' : '命运抉择' }}
+                    </button>
+                </div>
+
+                <!-- 4. GM 即时纠正（从主栏迁移） -->
+                <div v-if="lastDynamicContext && !isGeneratingOptions" style="padding:10px;background:rgba(167,139,250,.04);border:1px solid rgba(167,139,250,.15);border-radius:6px">
+                    <div style="font-size:11px;font-weight:600;color:#a78bfa;margin-bottom:6px;display:flex;align-items:center;gap:4px">
+                        <i class="ph ph-pencil-line"></i> GM 即时纠正
+                    </div>
+                    <div style="display:flex;gap:6px">
+                        <input v-model="gmCorrection" @keyup.enter="retryWithCorrection" type="text"
+                               placeholder="例：艾琳不会这么快答应，她应该更犹豫…"
+                               class="inp" style="flex:1;font-size:12px;border-color:rgba(167,139,250,.2)">
+                        <button @click="retryWithCorrection" :disabled="isGeneratingOptions||!gmCorrection.trim()" class="btn btn-sm"
+                                style="flex-shrink:0;background:rgba(167,139,250,.1);border-color:rgba(167,139,250,.3);color:#a78bfa">
+                            <i :class="isGeneratingOptions?'ph ph-circle-notch':'ph ph-arrow-counter-clockwise'" :style="isGeneratingOptions?'animation:spin 1s linear infinite':''"></i>
+                        </button>
+                    </div>
+                    <div v-if="lastDynamicContext.action" style="margin-top:5px;font-size:10px;color:#4b5563">
+                        上次：「{{ lastDynamicContext.action }}」→ {{ lastDynamicContext.branchCount }} 个分支
+                    </div>
+                </div>
             </div>
         </aside>
     </div>
@@ -2764,6 +2738,7 @@ createApp({
         const ttsPlaying = ref(false);
         const ttsVoice = ref('female');   // 'male' | 'female'
         const ttsTone  = ref('normal');   // 'normal' | 'lyrical' | 'creepy'
+        const ttsRate  = ref(1.0);        // 倍速：0.5 / 0.75 / 1.0 / 1.25 / 1.5 / 2.0
         let _ttsUtterance = null;
 
         const _ttsGetVoice = (gender) => {
@@ -2781,7 +2756,7 @@ createApp({
             if (!currentNode.value) return;
             if (ttsPlaying.value) { speechSynthesis.cancel(); ttsPlaying.value = false; return; }
 
-            const text = currentNode.value.content || '';
+            const text = currentNode.value.expanded_content || currentNode.value.content || '';
             if (!text.trim()) return;
 
             const utter = new SpeechSynthesisUtterance(text);
@@ -2797,7 +2772,7 @@ createApp({
                 creepy:  { rate: 0.72, pitch: 0.6  },
             };
             const t = toneMap[ttsTone.value] || toneMap.normal;
-            utter.rate  = t.rate;
+            utter.rate  = t.rate * ttsRate.value;
             utter.pitch = t.pitch;
 
             utter.onstart = () => { ttsPlaying.value = true; };
@@ -2878,21 +2853,12 @@ createApp({
             const t = tracks.value.find(t=>t.id===currentTrackId.value);
             return t ? (t.custom ? customTrackUrl.value : t.url) : '';
         });
-        const diceLog = ref([]);
-        const diceModifier = ref(0);
-        const diceTab = ref('roller');
-        const checkChar = ref('');
-        const checkAttr = ref('HP');
-        const checkCustomVal = ref(50);
-        const checkResult = ref(null);
-        const checkDiceSides = ref(100);
-        const checkDiceOptions = [{sides:4},{sides:6},{sides:8},{sides:10},{sides:12},{sides:20},{sides:100}];
-        const checkTargetDisplay = computed(() => {
-            if (!checkChar.value) return '—';
-            if (checkAttr.value==='HP') return checkChar.value.hp;
-            if (checkAttr.value==='SAN') return checkChar.value.san;
-            return checkCustomVal.value;
-        });
+        const narrativeMood = ref('');
+        const timeSkipInput = ref('');
+        const forceNarrativeThrust = ref(false);
+        const optionLikelihoods = ref({});
+        const fateSpinning = ref(false);
+        const fateHighlightIdx = ref(-1);
         const showTriggerModal = ref(false);
         const triggers = ref([]);
         const currentTrigger = ref(null);
@@ -3230,19 +3196,21 @@ createApp({
 
             if (targetNode) {
                 try {
-                    // Phase 3：流式展开场景叙事
-                    if (!targetNode.content || targetNode.content.length <= 120) {
-                        const expanded = await streamExpandBranch(
+                    // Phase 2：执行副作用（先于 expand，状态立即更新）
+                    const needExpand = !targetNode.expanded_content;
+                    const { fxContext, actionType } = await applyBranchEffects(nodeId);
+
+                    // Phase 3：流式展开场景叙事（读到最新 session_memory/party_status）
+                    if (needExpand) {
+                        await streamExpandBranch(
                             nodeId,
                             parentNode ? parentNode.name : '',
                             parentNode ? parentNode.content : '',
-                            optionText
+                            optionText,
+                            fxContext,
+                            actionType
                         );
-                        if (expanded) targetNode.content = expanded;
                     }
-
-                    // Phase 2：执行副作用
-                    await applyBranchEffects(nodeId);
 
                     // Phase 4：只有通过选项正常推进时才同步时间线地图位置
                     if (optionText) {
@@ -3509,7 +3477,7 @@ createApp({
                 }
             } catch(e) { alert('切换模型失败，请检查后端是否运行'); }
         };
-        const loadAndStart = async () => { if(!selectedCampaign.value)return; isLoading.value=true; try { const r=await fetch(`${API_BASE_URL}/api/game/load`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({filename:selectedCampaign.value})}); if(r.ok){await fetchGameState();appState.value='game';} } catch(e){} finally{isLoading.value=false;} };
+        const loadAndStart = async () => { if(!selectedCampaign.value)return; isLoading.value=true; isExpandingBranch.value=false; expandingBranchText.value=''; try { const r=await fetch(`${API_BASE_URL}/api/game/load`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({filename:selectedCampaign.value})}); if(r.ok){await fetchGameState();appState.value='game';} } catch(e){} finally{isLoading.value=false;} };
         const enterCurrentGame = async () => { await fetchGameState(); appState.value='game'; };
         const exportSave = async () => { try { const saveName = prompt('请输入存档名（留空使用时间戳）：','') ?? ''; const r=await fetch(`${API_BASE_URL}/api/game/export`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({save_name:saveName})}); const d=await r.json(); if(r.ok){alert(`存档保存成功：\ncampaigns/${d.folder}/`);fetchCampaigns();} } catch(e){} };
 
@@ -3525,7 +3493,8 @@ createApp({
             await fetchWorldEntities(); };
 
         // ── 流式展开分支叙事（共享工具函数）──
-        const streamExpandBranch = async (nodeId, sceneName, sceneContent, playerAction) => {
+        // fxContext/actionType：由 applyBranchEffects 返回后回传，让 expand 读到最新状态
+        const streamExpandBranch = async (nodeId, sceneName, sceneContent, playerAction, fxContext = '', actionType = '') => {
             isExpandingBranch.value = true;
             expandingBranchText.value = '';
             let fullText = '';
@@ -3538,6 +3507,8 @@ createApp({
                         scene_name: sceneName || '',
                         scene_content: (sceneContent || '').slice(0, 500),
                         player_action: playerAction || '',
+                        fx_context: fxContext || '',
+                        action_type: actionType || '',
                     })
                 });
                 const reader = resp.body.getReader();
@@ -3564,10 +3535,15 @@ createApp({
                 console.error('stream expand-branch failed:', e);
             }
             isExpandingBranch.value = false;
+            if (fullText) {
+                const nodeInStore = storyNodes.value.find(n => n.id === nodeId);
+                if (nodeInStore) nodeInStore.expanded_content = fullText;
+            }
             return fullText;
         };
 
         // ── 执行副作用并刷新状态（共享工具函数）──
+        // 返回 { fxContext, actionType } 供后续 expand 使用
         const applyBranchEffects = async (nodeId) => {
             try {
                 const fxResp = await fetch(`${API_BASE_URL}/api/ai/apply-branch-effects`, {
@@ -3587,8 +3563,10 @@ createApp({
                         if (statChangesTimer) clearTimeout(statChangesTimer);
                         statChangesTimer = setTimeout(() => { showStatChanges.value = false; }, 10000);
                     }
+                    return { fxContext: fxData.fx_context || '', actionType: fxData.action_type || '' };
                 }
             } catch (e) { console.error('apply-branch-effects failed:', e); }
+            return { fxContext: '', actionType: '' };
         };
 
         const jumpToNode = async (nodeId, optionText = '') => {
@@ -3596,28 +3574,27 @@ createApp({
             const prevNode = currentNode.value; // 保存父场景引用
             const isNew=!prevNode||prevNode.id!==next.id;
             currentNode.value=next; aiGeneratedText.value=''; generatedImageUrl.value=''; syncEditData();
+            optionLikelihoods.value = {}; // 跳转后清空概率（只对当前推演结果有效）
             if(!isNew||isEditMode.value)return;
 
-            // 【概要模式 Phase 3→2】：先流式展开叙事，再执行副作用
-            // expand-branch/stream 需要读取 pending_effects 作为叙事上下文，
-            // apply-branch-effects 会删除 pending_effects，所以必须先 expand 再 apply。
+            // 【新调用顺序 Phase 2→3】：先执行副作用，再用最新状态扩写叙事
+            // apply 返回 fx_context（确定结果摘要）供 expand 使用，无需再读 pending_effects
             try {
-                // Phase 3：流式展开场景叙事（如果是概要模式生成的短节点）
-                if (!next.content || next.content.length <= 120) {
-                    const expanded = await streamExpandBranch(
+                // Phase 2：执行副作用（状态、记忆、情绪立即写入数据库）
+                const needExpand = !next.expanded_content;
+                const { fxContext, actionType } = await applyBranchEffects(next.id);
+
+                // Phase 3：流式展开场景叙事（此时 session_memory/party_status 已是最新）
+                if (needExpand) {
+                    await streamExpandBranch(
                         next.id,
                         prevNode ? prevNode.name : '',
                         prevNode ? prevNode.content : '',
-                        optionText
+                        optionText,
+                        fxContext,
+                        actionType
                     );
-                    if (expanded) {
-                        next.content = expanded;
-                        currentNode.value = {...next}; // 触发 Vue 响应式更新
-                    }
                 }
-
-                // Phase 2：执行副作用
-                await applyBranchEffects(next.id);
 
                 // Phase 4：只有通过选项正常推进时才同步地图位置
                 // GM 从节点树手动跳转（optionText 为空）不同步，避免地图瞬移破坏叙事逻辑
@@ -3829,7 +3806,7 @@ createApp({
         const generateNPC=async()=>{if(!currentNode.value)return;isGeneratingNPC.value=true;try{const r=await fetch(`${API_BASE_URL}/api/ai/generate-npc`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scene_name:currentNode.value.name,scene_content:currentNode.value.content,player_action:playerAction.value||'Explore'})});const d=await r.json();if(d.status==='success'){await fetchGameState();showNpcToast(d.npc);}}catch(e){}finally{isGeneratingNPC.value=false;}};
 
         // ── AI ──
-        const generateAIText=async()=>{if(!currentNode.value)return;isGeneratingText.value=true;try{const r=await fetch(`${API_BASE_URL}/api/ai/expand-text`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scene_name:currentNode.value.name||'',content:currentNode.value.content||''})});const data=await r.json();aiGeneratedText.value=data.generated_text;if(data.generated_text&&currentNode.value){const newContent=data.generated_text;currentNode.value={...currentNode.value,content:newContent};const node=storyNodes.value.find(n=>n.id===currentNode.value.id);if(node)node.content=newContent;await fetch(`${API_BASE_URL}/api/game/node/${currentNode.value.id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:currentNode.value.name||'',summary:currentNode.value.summary||'',content:newContent})});syncEditData();}}catch(e){}finally{isGeneratingText.value=false;}};
+        const generateAIText=async()=>{if(!currentNode.value)return;isGeneratingText.value=true;try{const r=await fetch(`${API_BASE_URL}/api/ai/expand-text`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scene_name:currentNode.value.name||'',content:currentNode.value.content||''})});const data=await r.json();aiGeneratedText.value=data.generated_text;}catch(e){}finally{isGeneratingText.value=false;}};
         const generateDynamicOptions=async(correctionText='')=>{
             if(!currentNode.value||((!playerAction.value)&&!correctionText&&!lastDynamicContext.value))return;
             isGeneratingOptions.value=true;
@@ -3847,6 +3824,8 @@ createApp({
                     action_type: actionType.value || 'mixed',
                 };
                 if(correctionText) body.gm_correction = correctionText;
+                if(narrativeMood.value) body.mood = narrativeMood.value;
+                if(forceNarrativeThrust.value) body.force_thrust = true;
 
                 const r=await fetch(`${API_BASE_URL}/api/ai/dynamic-options`,{
                     method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)
@@ -3855,6 +3834,11 @@ createApp({
                 if(d.status==='success'){
                     if(!correctionText) playerAction.value='';
                     gmCorrection.value='';
+                    forceNarrativeThrust.value = false;
+                    // 提取分支概率
+                    const newLikelihoods = {};
+                    (d.new_options||[]).forEach(opt => { if(opt.likelihood) newLikelihoods[opt.next_node_id] = opt.likelihood; });
+                    optionLikelihoods.value = newLikelihoods;
                     // 保存推演上下文供 GM 干预重试 + 脑内剧场展示
                     lastDynamicContext.value = {
                         action: action,
@@ -3954,49 +3938,68 @@ createApp({
             }).catch(() => {});
         };
 
-        // ── Dice ──
-        const rollDice = (sides) => { 
-            const result = Math.floor(Math.random() * sides) + 1;
-            const mod = parseInt(diceModifier.value) || 0;
-            const final = result + mod;
-            const timeStr = new Date().toLocaleTimeString('zh-CN', { hour12: false });
-            diceLog.value.unshift({ sides, result, mod, final, time: timeStr });
-            if (diceLog.value.length > 15) diceLog.value.pop();
+        // ── 叙事控制台 ──
+        const doTimeSkip = async () => {
+            if (!timeSkipInput.value.trim() || isGeneratingOptions.value) return;
+            playerAction.value = `【时间快进：${timeSkipInput.value.trim()}】`;
+            timeSkipInput.value = '';
+            await generateDynamicOptions();
         };
 
-        const doCheck = () => {
-            if (!checkChar.value || !checkAttr.value) return;
-            const char = checkChar.value;
-            const sides = checkDiceSides.value;
-            let target;
-            if (checkAttr.value === 'HP') target = char.hp;
-            else if (checkAttr.value === 'SAN') target = char.san;
-            else target = parseInt(checkCustomVal.value) || Math.floor(sides / 2);
+        const doForceThrust = async () => {
+            if (isGeneratingOptions.value || !currentNode.value) return;
+            forceNarrativeThrust.value = true;
+            await generateDynamicOptions();
+        };
 
-            const roll = Math.floor(Math.random() * sides) + 1;
-            const success = roll <= target;
-            let label = '', critical = false;
+        const fatePick = () => {
+            const lh = optionLikelihoods.value;
+            const opts = currentNode.value?.options;
+            if (!opts?.length || !Object.keys(lh).length || fateSpinning.value) return;
 
-            if (sides === 100) {
-                if (roll <= 5) { label = '大成功'; critical = true; }
-                else if (roll >= 96) { label = '大失败'; critical = true; }
-                else if (success && roll <= Math.floor(target / 5)) label = '极限成功';
-                else if (success && roll <= Math.floor(target / 2)) label = '困难成功';
-                else if (success) label = '成功';
-                else label = '失败';
-            } else if (sides === 20) {
-                if (roll === 1) { label = '天然20(大成功)'; critical = true; }
-                else if (roll === 20) { label = '天然1(大失败)'; critical = true; }
-                else if (success) label = '成功';
-                else label = '失败';
-            } else {
-                if (roll === sides) { label = '最大值'; critical = true; }
-                else if (roll === 1) { label = '最小值'; critical = true; }
-                else if (success) label = '成功';
-                else label = '失败';
+            // 加权随机算出赢家
+            // 只对有概率映射的选项参与抉择（排除原有选项）
+            const eligibleOpts = opts.filter(o => lh[o.next_node_id]);
+            if (!eligibleOpts.length) return;
+            const weightMap = { '极高': 50, '高': 35, '中等': 20, '低': 10, '极低': 3 };
+            const weights = eligibleOpts.map(o => {
+                const val = lh[o.next_node_id] || '';
+                for (const [key, w] of Object.entries(weightMap)) {
+                    if (val.startsWith(key)) return w;
+                }
+                return 20;
+            });
+            const total = weights.reduce((a, b) => a + b, 0);
+            let rand = Math.random() * total;
+            let winnerIdx = eligibleOpts.length - 1;
+            for (let i = 0; i < eligibleOpts.length; i++) {
+                rand -= weights[i];
+                if (rand <= 0) { winnerIdx = i; break; }
             }
 
-            checkResult.value = { roll, target, success, label, critical, charName: char.name, attr: checkAttr.value, diceSides: sides };
+            // 命运转轮动画：在 eligibleOpts 中循环高亮（用 next_node_id 对应原始 opts 的位置）
+            // 转轮高亮基于 opts 的真实下标，需要找到 eligibleOpts[i] 在 opts 中的位置
+            const eligibleIndices = eligibleOpts.map(o => opts.findIndex(x => x.next_node_id === o.next_node_id));
+            fateSpinning.value = true;
+            const n = eligibleOpts.length;
+            const totalTicks = 16 + Math.floor(Math.random() * 7); // 16-22 帧
+            // 反推起始位置（在 eligibleIndices 数组中的偏移），使顺序循环恰好以 winnerIdx 结尾
+            const startOffset = (((winnerIdx - (totalTicks - 1) % n) % n) + n) % n;
+            let delay = 0;
+            for (let step = 0; step < totalTicks; step++) {
+                const progress = step / (totalTicks - 1);
+                const interval = 55 + Math.pow(progress, 1.8) * 305;
+                delay += interval;
+                const eligiblePos = (startOffset + step) % n;
+                const realIdx = eligibleIndices[eligiblePos]; // opts 中的真实下标
+                setTimeout(() => { fateHighlightIdx.value = realIdx; }, delay);
+            }
+            // 停顿后跳转
+            setTimeout(() => {
+                fateSpinning.value = false;
+                fateHighlightIdx.value = -1;
+                jumpToNode(eligibleOpts[winnerIdx].next_node_id, eligibleOpts[winnerIdx].text);
+            }, delay + 650);
         };
 
         // ── Tree Layout ──
@@ -4492,7 +4495,7 @@ createApp({
             appState, isLoading, dbConnected, campaignFiles, selectedCampaign,
             // AI 模型
             aiModels, activeAiModel, fetchAiModels, switchAiModel,
-            storyNodes, characters, currentNode, isEditMode, hpLabel, sanLabel, editData, newOptionText, newOptionTarget, showWorldviewModal, worldviewContent, showMemoryModal, memoryContent, showLorebookModal, lorebook, currentLore, aiGeneratedText, playerAction, actionType, isGeneratingText, isGeneratingOptions, ttsPlaying, ttsVoice, ttsTone, ttsSpeak, imgPrompt, imgStyle, isGeneratingImage, isLoadingImg, generatedImageUrl, imgEnPrompt, imgLoadError, audioRef, tracks, currentTrackId, currentTrackUrl, customTrackUrl, isPlaying, volume, diceLog, diceModifier, diceTab, checkChar, checkAttr, checkCustomVal, checkResult, checkDiceSides, checkDiceOptions, checkTargetDisplay, showTriggerModal, triggers, currentTrigger, condTypes, showCharModal, isGeneratingNPC, isExpandingBranch, expandingBranchText, newChar, npcToast, triggerAlert, statChangesLog, showStatChanges, showBattleReportModal, battleReport, isGeneratingReport, battleReportFilename, leftTab, treeContainerRef, treeLayout,
+            storyNodes, characters, currentNode, isEditMode, hpLabel, sanLabel, editData, newOptionText, newOptionTarget, showWorldviewModal, worldviewContent, showMemoryModal, memoryContent, showLorebookModal, lorebook, currentLore, aiGeneratedText, playerAction, actionType, isGeneratingText, isGeneratingOptions, ttsPlaying, ttsVoice, ttsTone, ttsRate, ttsSpeak, imgPrompt, imgStyle, isGeneratingImage, isLoadingImg, generatedImageUrl, imgEnPrompt, imgLoadError, audioRef, tracks, currentTrackId, currentTrackUrl, customTrackUrl, isPlaying, volume, narrativeMood, timeSkipInput, forceNarrativeThrust, optionLikelihoods, fateSpinning, fateHighlightIdx, showTriggerModal, triggers, currentTrigger, condTypes, showCharModal, isGeneratingNPC, isExpandingBranch, expandingBranchText, newChar, npcToast, triggerAlert, statChangesLog, showStatChanges, showBattleReportModal, battleReport, isGeneratingReport, battleReportFilename, leftTab, treeContainerRef, treeLayout,
             // 时间线系统
             timelinePanelOpen, timelines, showTlEditModal, tlEditData, tlColorPresets,
             showTlMemoryModal, tlMemoryTarget, tlMemoryContent,
@@ -4509,7 +4512,7 @@ createApp({
             ragUploadFile, ragDragOver,
             openRagModal, ragImport, ragIngest, ragDeleteDoc, ragSearch,
             ragHandleFileSelect, ragHandleDrop,
-            fetchCampaigns, loadAndStart, enterCurrentGame: enterCurrentGameWithTl, exportSave, fetchGameState, jumpToNode, saveNodeChanges, createNewNode, deleteCurrentNode, addManualOption, deleteOption, saveStatLabels, saveCharacterState, createCharacter, deleteCharacter, generateNPC, resetNewChar, openWorldviewModal, saveWorldview, openMemoryModal, saveMemory, openLorebookModal, saveLore, deleteLore, fetchTriggers, openTriggerModal, newTrigger, selectTrigger, saveTrigger, deleteTrigger, resetTriggerFired, generateAIText, generateDynamicOptions, openBattleReportModal, generateBattleReport, downloadBattleReport, generateImage, togglePlay, changeTrack, rollDice, doCheck,
+            fetchCampaigns, loadAndStart, enterCurrentGame: enterCurrentGameWithTl, exportSave, fetchGameState, jumpToNode, saveNodeChanges, createNewNode, deleteCurrentNode, addManualOption, deleteOption, saveStatLabels, saveCharacterState, createCharacter, deleteCharacter, generateNPC, resetNewChar, openWorldviewModal, saveWorldview, openMemoryModal, saveMemory, openLorebookModal, saveLore, deleteLore, fetchTriggers, openTriggerModal, newTrigger, selectTrigger, saveTrigger, deleteTrigger, resetTriggerFired, generateAIText, generateDynamicOptions, openBattleReportModal, generateBattleReport, downloadBattleReport, generateImage, togglePlay, changeTrack, doTimeSkip, doForceThrust, fatePick,
             // GM 干预
             gmCorrection, lastDynamicContext, retryWithCorrection,
             // NPC Persona

@@ -27,6 +27,10 @@ Z.R.I.C.log.*
 campaigns/*
 !campaigns/盘步山规则怪谈/
 !campaigns/苏黎世恋曲/
+!campaigns/空白剧本/
+
+# 没做好
+phone*.html
 
 # 备份 / 草稿文件
 *副本*

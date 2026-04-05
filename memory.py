@@ -127,7 +127,10 @@ def _l1_evict_to_l3(conn, rows):
 
     evict_text = "\n".join(evict_text_parts)
 
-    # 用 AI 压缩为精炼摘要
+    # ── 所有 IO 操作（AI调用、embedding）先于任何数据库写入完成 ──
+    # 避免在 AI 调用期间持有 SQLite 写锁，导致其他写操作超时
+
+    # 1. AI 压缩摘要
     try:
         resp = _deepseek_client.chat.completions.create(
             model="deepseek-chat",
@@ -147,33 +150,40 @@ def _l1_evict_to_l3(conn, rows):
         _log.warning("L1→L3 记忆摘要 AI 调用失败，降级为截断: %s", e)
         summary = evict_text[:MEMORY_SUMMARY_LIMIT]
 
-    # 尝试写入 L3（RAG 向量库）
+    # 2. embedding（仍在写库之前）
     try:
-        doc_title = f"长期记忆_{datetime.now().strftime('%m%d_%H%M')}"
-        cur = conn.execute(
-            "INSERT INTO rag_documents (title, source, chunk_size) VALUES (?,?,?)",
-            (doc_title, "memory_l3_eviction", 1)
-        )
-        doc_id = cur.lastrowid
-
         vecs = _get_embeddings([summary]) if _get_embeddings else []
         emb_json = json.dumps(vecs[0]) if vecs and vecs[0] else "[]"
-
-        conn.execute(
-            "INSERT INTO rag_chunks (doc_id, chunk_index, chunk_text, embedding) "
-            "VALUES (?,?,?,?)",
-            (doc_id, 0, summary, emb_json)
-        )
+        use_rag = True
     except Exception as e:
-        _log.warning("L1→L3 embedding 写入失败，降级到 session_memory: %s", e)
-        row = conn.execute(
-            "SELECT value FROM system_state WHERE key='session_memory'"
-        ).fetchone()
-        old_mem = row["value"] if row else ""
-        conn.execute(
-            "INSERT OR REPLACE INTO system_state (key,value) VALUES ('session_memory',?)",
-            (old_mem + f"\n【长期记忆归档】{summary}",)
-        )
+        _log.warning("L1→L3 embedding 调用失败，降级到 session_memory: %s", e)
+        emb_json = "[]"
+        use_rag = False
+
+    # 3. 统一写库（写锁仅在此块内持有，耗时 <5ms）
+    doc_title = f"长期记忆_{datetime.now().strftime('%m%d_%H%M')}"
+    try:
+        if use_rag:
+            cur = conn.execute(
+                "INSERT INTO rag_documents (title, source, chunk_size) VALUES (?,?,?)",
+                (doc_title, "memory_l3_eviction", 1)
+            )
+            conn.execute(
+                "INSERT INTO rag_chunks (doc_id, chunk_index, chunk_text, embedding) "
+                "VALUES (?,?,?,?)",
+                (cur.lastrowid, 0, summary, emb_json)
+            )
+        else:
+            row = conn.execute(
+                "SELECT value FROM system_state WHERE key='session_memory'"
+            ).fetchone()
+            old_mem = row["value"] if row else ""
+            conn.execute(
+                "INSERT OR REPLACE INTO system_state (key,value) VALUES ('session_memory',?)",
+                (old_mem + f"\n【长期记忆归档】{summary}",)
+            )
+    except Exception as e:
+        _log.warning("L1→L3 写库失败: %s", e)
 
     for rid in evict_ids:
         conn.execute("DELETE FROM memory_l1 WHERE id=?", (rid,))

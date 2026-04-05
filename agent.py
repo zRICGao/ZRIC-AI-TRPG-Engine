@@ -6,6 +6,7 @@ SSE 流式推演端点、结果后处理（NPC/stat/map/entity）。
 """
 
 import json
+import json_repair
 import sqlite3
 from datetime import datetime
 from contextlib import contextmanager
@@ -439,7 +440,8 @@ _DYNAMIC_OPTIONS_JSON_SCHEMA = """{
         "new_room": {"label": "新发现的房间名(10字内)", "description": "新房间描述(30字内)"},
         "unlock_edge": {"from_label": "房间A名称", "to_label": "房间B名称", "key_used": "使用的钥匙名"}
       },
-      "npc": {"name": "姓名(10字内)", "role": "NPC", "hp": 50, "san": 60, "inventory": "持有物(30字内)", "backstory": "背景(50字内)"}
+      "npc": {"name": "姓名(10字内)", "role": "NPC", "hp": 50, "san": 60, "inventory": "持有物(30字内)", "backstory": "背景(50字内)"},
+      "likelihood": "极高/高/中等/低/极低（一句话理由，基于角色状态和世界观规则）"
     }
   ]
 }
@@ -447,6 +449,7 @@ _DYNAMIC_OPTIONS_JSON_SCHEMA = """{
 - 若某分支没有 stat_changes，则省略整个 key
 - 若某分支没有 entity_updates / emotion_deltas / npc_memories，则省略
 - 若无空间变化，省略 map_actions；若无新 NPC，省略 npc
+- likelihood 字段每个分支必须输出，不可省略
 - 只保留有实际内容的字段"""
 
 # 【对话模式】JSON Schema — 砍掉 stat_changes / map_actions / npc，强化情绪和记忆
@@ -460,13 +463,15 @@ _DIALOGUE_JSON_SCHEMA = """{
       "san_delta": {"char_name": "角色名", "delta": -5, "reason": "心理冲击原因"},
       "entity_updates": "NPC态度变化描述",
       "emotion_deltas": [{"npc_name": "NPC名字", "trust": 10, "fear": 0, "irritation": -5}],
-      "npc_memories": [{"npc_name": "NPC名字", "memory": "从该NPC视角记住的一句话"}]
+      "npc_memories": [{"npc_name": "NPC名字", "memory": "从该NPC视角记住的一句话"}],
+      "likelihood": "极高/高/中等/低/极低（一句话理由，基于NPC性格和玩家行为）"
     }
   ]
 }
 【极重要·字段省略规则】：
 - 对话模式下不允许出现 stat_changes / map_actions / npc 字段
 - 若无 SAN 变化，省略 san_delta；其余同上
+- likelihood 字段每个分支必须输出，不可省略
 - 只保留有实际内容的字段"""
 
 # 【行动模式】JSON Schema — 与混合模式相同
@@ -506,7 +511,8 @@ _INSTRUCTION_DIALOGUE = """
 
 推演 2-4 个对话走向分支。每个分支的 node_content（约60字）必须包含 NPC 的关键台词（用「」包裹）和核心肢体语言。
 【极其重要】每个分支的 entity_updates / emotion_deltas / npc_memories 必须写在该分支对象内部。不同对话走向可能导致不同的情绪后果。
-【对话模式禁止字段】不要输出 stat_changes / map_actions / npc 字段。SAN 变化使用 san_delta 字段。"""
+【对话模式禁止字段】不要输出 stat_changes / map_actions / npc 字段。SAN 变化使用 san_delta 字段。
+【概率判定】每个分支必须输出 likelihood 字段，格式为"极高/高/中等/低/极低（理由）"。理由基于 NPC 性格倾向、玩家社交行为的说服力和当前情境压力，不超过15字。不要输出数字概率。"""
 
 _INSTRUCTION_ACTION = """
 === 推演指令（物理行动模式）===
@@ -527,7 +533,8 @@ _INSTRUCTION_ACTION = """
 
 推演 2-4 个结果分支。每个分支的 node_content（约60字）必须包含关键动作描写、伤害程度和环境变化等核心锚点。
 【极其重要】每个分支的 stat_changes / entity_updates / map_actions / npc 必须写在该分支对象内部。不同结果可能导致完全不同的HP变化和空间移动。
-【字段省略】没有变化的字段直接省略，不要写空数组或 null。"""
+【字段省略】没有变化的字段直接省略，不要写空数组或 null。
+【概率判定】每个分支必须输出 likelihood 字段，格式为"极高/高/中等/低/极低（理由）"。理由基于角色属性、装备支撑度和物理可行性，不超过15字。不要输出数字概率。"""
 
 _INSTRUCTION_MIXED = """
 === 推演指令 ===
@@ -546,7 +553,8 @@ _INSTRUCTION_MIXED = """
 不同分支可能导致完全不同的后果（例如分支A扣HP，分支B不扣），系统会在玩家选择后只执行该分支的副作用。
 若行动导致空间移动，map_actions.movement 的目标必须在【地图空间感知】的相邻列表中。
 若发现新区域填 new_room，解锁通道填 unlock_edge。
-【字段省略】没有变化的字段直接省略，不要写空数组或 null。"""
+【字段省略】没有变化的字段直接省略，不要写空数组或 null。
+【概率判定】每个分支必须输出 likelihood 字段，格式为"极高/高/中等/低/极低（理由）"。综合 thought_process 的五步推理评估，理由不超过15字。不要输出数字概率。"""
 
 
 def _build_dynamic_system_prompt(worldview, party_status, relevant_lore,
@@ -554,7 +562,9 @@ def _build_dynamic_system_prompt(worldview, party_status, relevant_lore,
                                   world_entities_text, rag_context, map_context,
                                   is_timeline=False, tl_label="",
                                   action_type="mixed",
-                                  gm_correction=""):
+                                  gm_correction="",
+                                  mood="",
+                                  force_thrust=False):
     """构建推演用的 system prompt。根据 action_type 切换上下文策略和指令集。"""
     prefix = f"你是跑团GM，正在处理分叉时间线「{tl_label}」中的剧情推演。" if is_timeline else "你是一个跑团GM。"
     persona = ""
@@ -570,6 +580,24 @@ def _build_dynamic_system_prompt(worldview, party_status, relevant_lore,
 GM 对上一次推演结果不满意，明确要求你在本次推演中：
 {gm_correction.strip()}
 你必须严格执行此纠正指令。如果 GM 的纠正与世界观冲突，以 GM 指令为准。"""
+
+    # 氛围预设块
+    mood_block = ""
+    if mood and mood.strip():
+        mood_block = f"""
+
+=== 【氛围指令】===
+本次推演的叙事基调为「{mood.strip()}」，分支描写、NPC语气和环境细节都应契合此氛围。"""
+
+    # 叙事推力块（一次性）
+    thrust_block = ""
+    if force_thrust:
+        thrust_block = """
+
+=== 【系统指令：推动剧情】===
+GM 认为当前剧情节奏需要加速。在本次推演中：
+- 至少一个分支必须包含 NPC 主动抛出新线索、突发事件或尖锐质问
+- 至少一个分支保持当前节奏供玩家选择"""
 
     # ── 根据 action_type 选择上下文策略 ──
     if action_type == "dialogue":
@@ -602,7 +630,7 @@ GM 对上一次推演结果不满意，明确要求你在本次推演中：
 {_INSTRUCTION_DIALOGUE}
 
 必须返回严格 JSON（thought_process 为第一个字段）：
-{_DIALOGUE_JSON_SCHEMA}{gm_correction_block}"""
+{_DIALOGUE_JSON_SCHEMA}{mood_block}{thrust_block}{gm_correction_block}"""
 
     elif action_type == "action":
         # 行动模式：强化地图、砍 persona
@@ -632,7 +660,7 @@ GM 对上一次推演结果不满意，明确要求你在本次推演中：
 {_INSTRUCTION_ACTION}
 
 必须返回严格 JSON（thought_process 为第一个字段）：
-{_ACTION_JSON_SCHEMA}{gm_correction_block}"""
+{_ACTION_JSON_SCHEMA}{mood_block}{thrust_block}{gm_correction_block}"""
 
     else:
         # 混合模式：沿用原逻辑
@@ -663,7 +691,7 @@ GM 对上一次推演结果不满意，明确要求你在本次推演中：
 {_INSTRUCTION_MIXED}
 
 必须返回严格 JSON（thought_process 为第一个字段）：
-{_DYNAMIC_OPTIONS_JSON_SCHEMA}{gm_correction_block}"""
+{_DYNAMIC_OPTIONS_JSON_SCHEMA}{mood_block}{thrust_block}{gm_correction_block}"""
 
     return context_block
 
@@ -749,6 +777,7 @@ def _post_process_dynamic_result(conn, parsed: dict, scene_name: str,
             "scene_name": scene_name,
             "player_action": player_action,
             "thought_process": thought_process,
+            "skeleton": n_content,  # 60字骨架原文，冻结于此，不受 expand-branch 扩写影响
         }
 
         summary_text = o_text[:100]
@@ -772,6 +801,7 @@ def _post_process_dynamic_result(conn, parsed: dict, scene_name: str,
             "pending_entity_updates": b_entity_updates or "",
             "pending_map_actions": b_map_actions,
             "pending_npc": b_npc,
+            "likelihood": branch.get("likelihood", ""),
         })
 
     # L1 写入（记录推演发生，结果待定）
@@ -836,6 +866,13 @@ def apply_branch_effects(req: ApplyBranchEffectsRequest):
         scene_name = fx.get("scene_name", "")
         player_action = fx.get("player_action", "")
         thought_process = fx.get("thought_process", "")
+
+        # 在执行（并删除）pending_effects 之前，先提取 fx_context 和 skeleton
+        # 供前端回传给 expand-branch，使扩写能读到最新的 session_memory/party_status
+        class _FxRowProxy:
+            def __getitem__(self, k): return json.dumps(fx) if k == "payload" else None
+        _fx_context_for_expand, _ = _build_fx_context(_FxRowProxy())
+        _skeleton_for_expand = fx.get("skeleton", node["name"] or "")
 
         applied_changes = []
         spawned_npc = None
@@ -1050,13 +1087,18 @@ def apply_branch_effects(req: ApplyBranchEffectsRequest):
 
         # ── 写入记忆流（现在确定了选择） ──
         type_tag = {"dialogue": "🗣️", "action": "🏃", "mixed": "🎭"}.get(action_type, "")
-        chosen_text = node["name"] or ""
+        skeleton = fx.get("skeleton", node["name"] or "")
+        mem = f"{type_tag}[{scene_name}] {player_action}→{skeleton}"
         if tl_id_for_memory and _tl_append_memory:
-            _tl_append_memory(conn, tl_id_for_memory,
-                              f"{type_tag}在[{scene_name}]，玩家[{player_action}]→选择了[{chosen_text}]")
+            _tl_append_memory(conn, tl_id_for_memory, mem)
         elif _append_to_memory:
-            _append_to_memory(conn,
-                              f"{type_tag}在[{scene_name}]，玩家试图[{player_action}]→结果：[{chosen_text}]。")
+            _append_to_memory(conn, mem)
+
+        # 清除 Phase 1 的"待选择"快照（已被上面的确定结果取代，避免 L1 冗余）
+        conn.execute(
+            "DELETE FROM memory_l1 WHERE player_action=? AND ai_summary LIKE '[待选择]%' AND timeline_id IS ?",
+            (player_action[:200], tl_id_for_memory)
+        )
 
         # ── 清除副作用记录（防重复执行） ──
         # 新版：删除 pending_effects 表中的记录
@@ -1077,6 +1119,10 @@ def apply_branch_effects(req: ApplyBranchEffectsRequest):
             "entity_updates": entity_updates_text,
             "emotion_changes": _applied_emotions,
             "npc_memories": _applied_memories,
+            # 供前端回传给 expand-branch/stream，让扩写读到最新状态
+            "fx_context": _fx_context_for_expand,
+            "skeleton": _skeleton_for_expand,
+            "action_type": action_type,
         }
     except Exception as e:
         conn.close()
@@ -1087,8 +1133,9 @@ def apply_branch_effects(req: ApplyBranchEffectsRequest):
 # Phase 3：玩家选择分支后，生成该分支的完整叙事
 # （60字短叙事的核心配套端点——润色扩写）
 #
-# 【调用顺序】前端应先调 expand-branch（此时 pending_effects 还在，
-#   可读取副作用作为叙事上下文），再调 apply-branch-effects（执行并删除副作用）。
+# 【调用顺序】先 apply-branch-effects（执行副作用，返回 fx_context + skeleton），
+#   再 expand-branch（用前端传入的 fx_context + 最新状态生成叙事）。
+#   expand 接受可选 fx_context 参数；若未传，则兜底从 pending_effects 读取（向后兼容）。
 # ---------------------------------------------------------
 class ExpandBranchRequest(BaseModel):
     node_id: int              # 玩家选择的目标节点 ID
@@ -1096,6 +1143,8 @@ class ExpandBranchRequest(BaseModel):
     scene_content: str = ""   # 父场景正文（关键上下文）
     player_action: str = ""   # 玩家动作
     model: str | None = None  # 请求级模型选择（可选）
+    fx_context: str = ""      # apply 返回的确定结果文本（前端传入，优先于 pending_effects）
+    action_type: str = ""     # apply 返回的 action_type（前端传入，优先于 pending_effects）
 
 class ExpandBranchStreamRequest(ExpandBranchRequest):
     pass
@@ -1140,7 +1189,7 @@ def _build_fx_context(fx_row) -> tuple[str, str]:
     if npc and isinstance(npc, dict):
         fx_parts.append(f"NPC登场：{npc.get('name', '')} — {npc.get('backstory', '')}")
 
-    fx_context = ("【该分支的确定结果】\n" + "\n".join(fx_parts)) if fx_parts else ""
+    fx_context = ("【该分支的确定结果】\n" + "\n".join(fx_parts)) if fx_parts else "【该分支无额外副作用】"
     return fx_context, action_type
 
 
@@ -1222,17 +1271,21 @@ def expand_branch_content(req: ExpandBranchRequest):
         node_name = node["name"] or ""
         current_content = node["content"] or ""
 
-        # 权威判断：只有存在 pending_effects 记录的节点才需要扩写
-        # 没有记录 = 非 AI 生成的节点 / 已扩写过 / 手动编辑的节点 → 直接返回原内容
-        fx_row = conn.execute(
-            "SELECT payload FROM pending_effects WHERE node_id=?", (req.node_id,)
-        ).fetchone()
-        if not fx_row:
-            conn.close()
-            return {"status": "success", "content": current_content, "expanded": False}
-        fx_context, action_type = _build_fx_context(fx_row)
+        # fx_context 优先使用前端传入（apply 已执行后由前端回传）；
+        # 否则兜底从 pending_effects 读取（向后兼容旧调用顺序）。
+        if req.fx_context:
+            fx_context = req.fx_context
+            action_type = req.action_type or "mixed"
+        else:
+            fx_row = conn.execute(
+                "SELECT payload FROM pending_effects WHERE node_id=?", (req.node_id,)
+            ).fetchone()
+            if not fx_row:
+                conn.close()
+                return {"status": "success", "content": current_content, "expanded": False}
+            fx_context, action_type = _build_fx_context(fx_row)
 
-        # 构建完整上下文的 prompt
+        # 构建完整上下文的 prompt（此时 apply 已执行，session_memory/party_status 为最新）
         system_prompt, user_prompt = _build_expand_prompts(
             conn, req, node_name, current_content, fx_context, action_type
         )
@@ -1242,7 +1295,7 @@ def expand_branch_content(req: ExpandBranchRequest):
                                   model_override=req.model)
 
         # 写回 nodes.content
-        conn.execute("UPDATE nodes SET content=? WHERE id=?", (expanded_text, req.node_id))
+        conn.execute("UPDATE nodes SET expanded_content=? WHERE id=?", (expanded_text, req.node_id))
         conn.commit()
         conn.close()
         return {"status": "success", "content": expanded_text, "expanded": True}
@@ -1274,19 +1327,24 @@ def expand_branch_stream(req: ExpandBranchStreamRequest):
     node_name = node["name"] or ""
     current_content = node["content"] or ""
 
-    # 权威判断：只有存在 pending_effects 记录才扩写
-    fx_row = conn.execute(
-        "SELECT payload FROM pending_effects WHERE node_id=?", (req.node_id,)
-    ).fetchone()
-    if not fx_row:
-        conn.close()
-        def skip_gen():
-            yield f"data: {json.dumps({'type': 'text', 'content': current_content}, ensure_ascii=False)}\n\n"
-            yield f"data: {json.dumps({'type': 'done', 'full_text': current_content, 'expanded': False}, ensure_ascii=False)}\n\n"
-        return StreamingResponse(skip_gen(), media_type="text/event-stream")
-    fx_context, action_type = _build_fx_context(fx_row)
+    # fx_context 优先使用前端传入（apply 已执行后由前端回传）；
+    # 否则兜底从 pending_effects 读取（向后兼容旧调用顺序）。
+    if req.fx_context:
+        fx_context = req.fx_context
+        action_type = req.action_type or "mixed"
+    else:
+        fx_row = conn.execute(
+            "SELECT payload FROM pending_effects WHERE node_id=?", (req.node_id,)
+        ).fetchone()
+        if not fx_row:
+            conn.close()
+            def skip_gen():
+                yield f"data: {json.dumps({'type': 'text', 'content': current_content}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'type': 'done', 'full_text': current_content, 'expanded': False}, ensure_ascii=False)}\n\n"
+            return StreamingResponse(skip_gen(), media_type="text/event-stream")
+        fx_context, action_type = _build_fx_context(fx_row)
 
-    # 构建完整上下文的 prompt
+    # 构建完整上下文的 prompt（此时 apply 已执行，session_memory/party_status 为最新）
     system_prompt, user_prompt = _build_expand_prompts(
         conn, req, node_name, current_content, fx_context, action_type
     )
@@ -1309,7 +1367,7 @@ def expand_branch_stream(req: ExpandBranchStreamRequest):
         if full_text:
             try:
                 conn2 = get_db_connection()
-                conn2.execute("UPDATE nodes SET content=? WHERE id=?",
+                conn2.execute("UPDATE nodes SET expanded_content=? WHERE id=?",
                               (full_text, req.node_id))
                 conn2.commit()
                 conn2.close()
@@ -1326,6 +1384,8 @@ class DynamicActionRequest(BaseModel):
     gm_correction: str = ""  # GM 纠正指令（重新推演时填写）
     action_type: str = "mixed"  # "dialogue" | "action" | "mixed" — 动作经济分离
     model: str | None = None   # 请求级模型选择（可选，覆盖服务器默认值）
+    mood: str = ""             # 叙事氛围预设（如"恐怖"/"史诗"，空字符串=不干预）
+    force_thrust: bool = False  # GM叙事推力：强制注入推动剧情指令（一次性）
 
 class ExpandTextRequest(BaseModel):
     scene_name: str = ""
@@ -1350,19 +1410,17 @@ def dynamic_options_handler(request: DynamicActionRequest):
         worldview, party_status, relevant_lore, session_memory,
         l1_context, world_entities_text, rag_context, map_context,
         action_type=request.action_type,
-        gm_correction=request.gm_correction
+        gm_correction=request.gm_correction,
+        mood=request.mood,
+        force_thrust=request.force_thrust,
     )
     user_prompt = f"当前场景：{request.scene_name}\n场景内容：{request.content}\n玩家动作：{request.player_action}\n先思考，再生成分支。"
 
     try:
-        ai_result = _call_ai(system_prompt, user_prompt, temperature=0.8, max_tokens=900,
+        ai_result = _call_ai(system_prompt, user_prompt, temperature=0.8, max_tokens=980,
                              json_mode=True, model_override=request.model)
 
-        if ai_result.startswith("```"):
-            ai_result = ai_result.split("```")[1]
-            ai_result = ai_result[4:] if ai_result.startswith("json") else ai_result
-
-        parsed = json.loads(ai_result.strip())
+        parsed = json_repair.loads(ai_result)
         conn2 = get_db_connection()
         new_options, spawned_npc, applied_changes, map_result, thought_process, entity_updates_text = \
             _post_process_dynamic_result(conn2, parsed, request.scene_name,
@@ -1405,7 +1463,9 @@ def dynamic_options_stream(request: DynamicActionRequest):
         worldview, party_status, relevant_lore, session_memory,
         l1_context, world_entities_text, rag_context, map_context,
         action_type=request.action_type,
-        gm_correction=request.gm_correction
+        gm_correction=request.gm_correction,
+        mood=request.mood,
+        force_thrust=request.force_thrust,
     )
     user_prompt = f"当前场景：{request.scene_name}\n场景内容：{request.content}\n玩家动作：{request.player_action}\n先思考，再生成分支。\n注意：你必须只输出 JSON，不要有任何额外文字或 markdown 代码块。"
 
@@ -1413,7 +1473,7 @@ def dynamic_options_stream(request: DynamicActionRequest):
         full_text = ""
         # Phase 1: 流式输出 AI 文本
         for sse_line in _stream_ai_sse(system_prompt, user_prompt,
-                                        temperature=0.8, max_tokens=900,
+                                        temperature=0.8, max_tokens=980,
                                         model_override=request.model):
             yield sse_line
             # 提取 full_text
@@ -1428,16 +1488,7 @@ def dynamic_options_stream(request: DynamicActionRequest):
         if full_text:
             try:
                 # 清理可能的 markdown 代码块
-                cleaned = full_text.strip()
-                if cleaned.startswith("```"):
-                    cleaned = cleaned.split("```")[1]
-                    if cleaned.startswith("json"):
-                        cleaned = cleaned[4:]
-                    cleaned = cleaned.strip()
-                if cleaned.endswith("```"):
-                    cleaned = cleaned[:-3].strip()
-
-                parsed = json.loads(cleaned)
+                parsed = json_repair.loads(full_text)
                 conn2 = get_db_connection()
                 new_options, spawned_npc, applied_changes, map_result, thought_process, entity_updates_text = \
                     _post_process_dynamic_result(conn2, parsed, request.scene_name,
@@ -1609,3 +1660,87 @@ def npc_chat_stream(request: NPCChatRequest):
 
     from fastapi.responses import StreamingResponse
     return StreamingResponse(generate(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+# ── 请求模型 ──────────────────────────────────────────────────────────────────
+class NPCChatCommitRequest(BaseModel):
+    npc_name: str
+    player_message: str      # 玩家最后一条消息
+    npc_reply: str           # NPC 完整回复文本
+    chat_summary: str = ""   # 可选：前端传来的对话摘要（不传时由后端推断）
+
+
+@agent_router.post("/api/ai/npc-chat/commit")
+def npc_chat_commit(request: NPCChatCommitRequest):
+    """
+    聊天结束后调用：
+    1. 用 AI 推断本次对话的情绪变化（emotion_deltas）和 NPC 记忆（一句话）
+    2. 写回 world_entities.state_desc
+    """
+    NPC_MEMORY_KEEP = 16
+
+    with safe_db() as conn:
+        entity_row = conn.execute(
+            "SELECT id, state_desc FROM world_entities WHERE name=? AND entity_type='npc'",
+            (request.npc_name,)
+        ).fetchone()
+        if not entity_row:
+            return {"status": "skipped", "reason": "NPC not found in world_entities"}
+
+        sd = _parse_state_desc(entity_row["state_desc"])
+        emo = sd.get("emotion", {"trust": 0, "fear": 0, "irritation": 0})
+        current_desc = sd.get("desc", "")
+
+        # ── 调用 AI 推断情绪增量与记忆 ──────────────────────────────────────
+        sys_p = f"""你是游戏系统的情绪分析模块。根据一段微信聊天记录，判断 NPC【{request.npc_name}】的情绪变化，并用第一人称写下一条简短记忆。
+
+NPC 背景：{current_desc}
+当前情绪：信任={emo.get('trust',0)} 恐惧={emo.get('fear',0)} 烦躁={emo.get('irritation',0)}
+
+输出严格 JSON，不要多余文字：
+{{"trust_delta": <整数 -10~10>, "fear_delta": <整数 -10~10>, "irritation_delta": <整数 -10~10>, "memory": "<20字内第一人称记忆>"}}"""
+
+        usr_p = f"玩家说：{request.player_message}\n{request.npc_name}回复：{request.npc_reply}"
+
+        raw = _call_ai(sys_p, usr_p, temperature=0.3, max_tokens=120)
+
+        # 解析 AI 输出
+        trust_d = fear_d = irr_d = 0
+        memory_text = ""
+        try:
+            parsed = json_repair.loads(raw)
+            trust_d  = max(-10, min(10, int(parsed.get("trust_delta", 0))))
+            fear_d   = max(-10, min(10, int(parsed.get("fear_delta", 0))))
+            irr_d    = max(-10, min(10, int(parsed.get("irritation_delta", 0))))
+            memory_text = str(parsed.get("memory", "")).strip()[:80]
+        except Exception:
+            pass
+
+        # ── 更新情绪 ─────────────────────────────────────────────────────────
+        emo["trust"]      = max(-100, min(100, emo.get("trust", 0)      + trust_d))
+        emo["fear"]       = max(-100, min(100, emo.get("fear", 0)       + fear_d))
+        emo["irritation"] = max(-100, min(100, emo.get("irritation", 0) + irr_d))
+        sd["emotion"] = emo
+
+        # ── 更新记忆 ─────────────────────────────────────────────────────────
+        if memory_text:
+            memories = sd.get("memory", [])
+            memories.append(f"[私聊] {memory_text}")
+            if len(memories) > NPC_MEMORY_KEEP:
+                memories = memories[-NPC_MEMORY_KEEP:]
+            sd["memory"] = memories
+
+        conn.execute(
+            "UPDATE world_entities SET state_desc=?, updated_at=? WHERE id=?",
+            (json.dumps(sd, ensure_ascii=False),
+             __import__('datetime').datetime.now().strftime("%Y-%m-%d %H:%M"),
+             entity_row["id"])
+        )
+        conn.commit()
+
+    return {
+        "status": "ok",
+        "emotion": emo,
+        "trust_delta": trust_d, "fear_delta": fear_d, "irritation_delta": irr_d,
+        "memory_added": memory_text,
+    }

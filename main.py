@@ -337,6 +337,9 @@ def init_db():
     # 平滑升级：timelines 加 current_room_id（时间线坐标）
     try: cursor.execute("ALTER TABLE timelines ADD COLUMN current_room_id INTEGER")
     except sqlite3.OperationalError: pass
+    # 平滑升级：nodes 加 expanded_content 字段（AI扩写叙事持久化）
+    try: cursor.execute("ALTER TABLE nodes ADD COLUMN expanded_content TEXT DEFAULT ''")
+    except sqlite3.OperationalError: pass
 
     # 初始化本地剧情记忆流字段
     cursor.execute("INSERT OR IGNORE INTO system_state (key, value) VALUES ('session_memory', '【跑团记忆日志已初始化】\n')")
@@ -552,9 +555,10 @@ def load_campaign(req: LoadCampaignRequest):
             )
         for node in config.get("nodes", []):
             cursor.execute(
-                "INSERT INTO nodes (id, name, summary, content) VALUES (?,?,?,?)",
+                "INSERT INTO nodes (id, name, summary, content, expanded_content) VALUES (?,?,?,?,?)",
                 (node.get("id"), node.get("name"),
-                 node.get("summary"), node.get("content"))
+                 node.get("summary"), node.get("content"),
+                 node.get("expanded_content", ""))
             )
         for opt in config.get("options", []):
             cursor.execute(
@@ -620,11 +624,53 @@ def load_campaign(req: LoadCampaignRequest):
                  we.get("updated_at", ""), we.get("room_id"))
             )
 
-        # ── 还原 RAG 知识库 ────────────────────────────────────
-        # 来源1：config 内嵌的 rag_library（旧版/导出存档）
-        rag_library = config.get("rag_library", [])
+        # ── 还原 memory_l1 ─────────────────────────────────────────
+        for ml in config.get("memory_l1", []):
+            cursor.execute(
+                "INSERT INTO memory_l1 (scene_name, player_action, ai_summary, "
+                "thought_process, entity_updates, timeline_id) VALUES (?,?,?,?,?,?)",
+                (ml.get("scene_name", ""), ml.get("player_action", ""),
+                 ml.get("ai_summary", ""), ml.get("thought_process", ""),
+                 ml.get("entity_updates", ""), ml.get("timeline_id"))
+            )
 
-        # 来源2：文件夹模式下的 knowledge/ 目录（*.txt, *.md）
+        # ── 还原 pending_effects ────────────────────────────────────
+        for pe in config.get("pending_effects", []):
+            cursor.execute(
+                "INSERT INTO pending_effects (node_id, payload) VALUES (?,?)",
+                (pe.get("node_id"), pe.get("payload", "{}"))
+            )
+
+        # ── 还原 RAG 知识库 ────────────────────────────────────
+        rag_library = config.get("rag_library", [])
+        load_type = "文件夹" if is_folder else "单文件"
+
+        # 判断是否为含预计算 embedding 的导出存档（items 有 chunks 字段而非 text 字段）
+        has_precomputed = bool(rag_library) and all("chunks" in item for item in rag_library)
+
+        if has_precomputed:
+            # 直接恢复预计算数据，跳过 knowledge/ 目录和 embedding API，毫秒级完成
+            for doc_item in rag_library:
+                cur_doc = cursor.execute(
+                    "INSERT INTO rag_documents (title, source, chunk_size) VALUES (?,?,?)",
+                    (doc_item["title"][:100], doc_item.get("source", "")[:200],
+                     len(doc_item.get("chunks", [])))
+                )
+                doc_id = cur_doc.lastrowid
+                for chunk in doc_item.get("chunks", []):
+                    cursor.execute(
+                        "INSERT INTO rag_chunks (doc_id, chunk_index, chunk_text, embedding) "
+                        "VALUES (?,?,?,?)",
+                        (doc_id, chunk["index"], chunk["text"], chunk.get("embedding", "[]"))
+                    )
+            conn.commit()
+            conn.close()
+            _refresh_vector_cache()
+            _log.info("RAG 知识库从存档直接恢复，共 %d 个文档，跳过 embedding 重建", len(rag_library))
+            return {"status": "success", "message": f"成功加载 {req.filename}（{load_type}，含 {len(rag_library)} 个RAG文档）"}
+
+        # 原始剧本（无预计算数据）：从 knowledge/ 目录完整导入管道
+        raw_library = []
         if is_folder and kb_dir and os.path.isdir(kb_dir):
             for kb_file in sorted(glob.glob(os.path.join(kb_dir, "*.txt")) +
                                   glob.glob(os.path.join(kb_dir, "*.md"))):
@@ -632,7 +678,7 @@ def load_campaign(req: LoadCampaignRequest):
                     with open(kb_file, "r", encoding="utf-8") as kf:
                         kb_text = kf.read().strip()
                     if kb_text:
-                        rag_library.append({
+                        raw_library.append({
                             "title": os.path.splitext(os.path.basename(kb_file))[0],
                             "source": f"knowledge/{os.path.basename(kb_file)}",
                             "text": kb_text
@@ -640,7 +686,7 @@ def load_campaign(req: LoadCampaignRequest):
                 except Exception as e:
                     _log.warning("知识库文件读取失败: %s — %s", kb_file, e)
 
-        for rag_item in rag_library:
+        for rag_item in raw_library:
             title  = rag_item.get("title", "未命名")
             source = rag_item.get("source", "")
             text   = rag_item.get("text", "")
@@ -662,7 +708,7 @@ def load_campaign(req: LoadCampaignRequest):
         conn.commit()
 
         # ── 异步重建 RAG embedding（不阻塞加载响应）───────────
-        if rag_library:
+        if raw_library:
             import threading
             def _rebuild_embeddings():
                 try:
@@ -702,10 +748,10 @@ def load_campaign(req: LoadCampaignRequest):
         conn.close()
         # 加载完成后立即刷新向量缓存（embedding 为空的 chunks 会在后台线程重建后再次刷新）
         _refresh_vector_cache()
-        load_type = "文件夹" if is_folder else "单文件"
-        return {"status": "success", "message": f"成功加载 {req.filename}（{load_type}，含 {len(rag_library)} 个RAG文档）"}
+        return {"status": "success", "message": f"成功加载 {req.filename}（{load_type}，含 {len(raw_library)} 个RAG文档）"}
 
     except Exception as e:
+        _log.error("load_campaign 异常: %s", e, exc_info=True)
         raise fastapi.HTTPException(status_code=500, detail=f"加载失败: {str(e)}")
 
 class ExportSaveRequest(BaseModel):
@@ -737,6 +783,8 @@ def export_campaign(req: ExportSaveRequest = ExportSaveRequest()):
             "title": doc["title"], "source": doc["source"],
             "chunks": [{"index": c["chunk_index"], "text": c["chunk_text"], "embedding": c["embedding"]} for c in chunks]
         })
+    memory_l1 = [dict(row) for row in conn.execute("SELECT * FROM memory_l1").fetchall()]
+    pending_effects = [dict(row) for row in conn.execute("SELECT * FROM pending_effects").fetchall()]
     conn.close()
 
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -756,6 +804,8 @@ def export_campaign(req: ExportSaveRequest = ExportSaveRequest()):
             "lorebook": lorebook, "triggers": triggers,
             "timelines": timelines, "world_entities": world_entities,
             "rag_library": rag_export,
+            "memory_l1": memory_l1,
+            "pending_effects": pending_effects,
         }
         with open(os.path.join(folder_path, "campaign.json"), "w", encoding="utf-8") as f:
             json.dump(campaign_data, f, ensure_ascii=False, indent=4)
@@ -840,6 +890,12 @@ def update_stat_labels(req: StatLabelsRequest):
         conn.execute("INSERT OR REPLACE INTO system_state (key, value) VALUES ('san_label', ?)", (req.san_label[:20],))
         conn.commit()
     return {"status": "success"}
+
+@app.get("/api/world-entities")
+def get_world_entities():
+    with safe_db() as conn:
+        entities = [dict(row) for row in conn.execute("SELECT * FROM world_entities").fetchall()]
+    return {"entities": entities}
 
 @app.get("/api/game/state")
 def get_game_state():

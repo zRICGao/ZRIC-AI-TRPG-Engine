@@ -107,7 +107,7 @@ import re
 def chunk_text(text: str, max_size: int = 600) -> list[str]:
     """
     语义切分：
-    1. 优先按双换行符（\n\n）切分自然段落
+    1. 优先按双换行符（\n\n）切分自然段落    ##注释掉
     2. 如果文档没有双换行，fallback 到单换行（\n）切分
     3. 段落超过 max_size 时，按中文/英文句号切分
     4. 保留标点符号，不丢失语义边界

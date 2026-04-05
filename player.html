@@ -179,7 +179,7 @@
 
             <!-- 文字阅读板块（独立卡片） -->
             <div class="scene-text-card fade-in" style="animation-delay:.1s">
-                <div class="scene-text">{{ currentScene.content }}</div>
+                <div class="scene-text">{{ currentScene.expanded_content || currentScene.content }}</div>
 
                 <!-- 选项列表（内嵌在文字卡片底部） -->
                 <div v-if="currentScene.options && currentScene.options.length" class="mt-6 pt-5" style="border-top:1px solid rgba(200,170,100,0.12)">
