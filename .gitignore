@@ -14,7 +14,7 @@ persona_mode.json
 venv/
 env/
 
-# 数据库（运行时生成）
+# 数据库
 rpg_game.db
 rpg_game.db-wal
 rpg_game.db-shm
@@ -32,11 +32,14 @@ campaigns/*
 # 没做好
 phone*.html
 
+# 战报
+battle_report_*.md
+
 # 备份 / 草稿文件
 *副本*
 *（test）*
 
-# 工作日志（开发笔记，按需决定是否提交）
+# 工作日志
 工作日志/
 
 # IDE

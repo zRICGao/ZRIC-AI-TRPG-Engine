@@ -7,6 +7,7 @@ SSE 流式推演端点、结果后处理（NPC/stat/map/entity）。
 
 import json
 import json_repair
+import re
 import sqlite3
 from datetime import datetime
 from contextlib import contextmanager
@@ -15,6 +16,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional
 from logger import get_logger
+from entity import apply_emotion_delta, tick_emotion_decay
 
 _log = get_logger("agent")
 
@@ -496,7 +498,7 @@ _INSTRUCTION_DIALOGUE = """
 - trust（信任）：正值=更信任玩家，负值=更不信任
 - fear（恐惧）：正值=更害怕，负值=放松
 - irritation（烦躁）：正值=更恼火，负值=缓和
-注意：单次 delta 绝对值通常在 1-15 之间，只有极端事件（生死威胁/深层创伤被触及）才超过 25。
+注意：delta 分四档——日常闲聊(1-5)、明显影响(6-15)、重大转折(16-20)、超过20仅限救命/深层创伤等极端事件。系统会对小 delta 施加阻尼，对 delta≥20 的重大事件允许穿透阻尼直接入账。
 
 【NPC 记忆】
 每个分支必须输出 npc_memories 数组，用一句话从 NPC 的第一人称视角记录本次互动：
@@ -969,10 +971,12 @@ def apply_branch_effects(req: ApplyBranchEffectsRequest):
                 # 解析 state_desc JSON（兼容旧纯文本格式）
                 sd = _parse_state_desc(entity_row["state_desc"])
                 emo = sd.get("emotion", {"trust": 0, "fear": 0, "irritation": 0})
-                # 应用 delta（clamp 到 ±30 单次，-100~100 总值）
+                # 先衰减，再叠加（烈度穿透阻尼 + trust 背叛放大）
+                tick_emotion_decay(emo)
                 for key in ("trust", "fear", "irritation"):
-                    delta = max(-30, min(30, int(ed.get(key, 0))))
-                    emo[key] = max(-100, min(100, emo.get(key, 0) + delta))
+                    delta = int(ed.get(key, 0))
+                    if delta:
+                        apply_emotion_delta(emo, key, delta)
                 sd["emotion"] = emo
                 conn.execute("UPDATE world_entities SET state_desc=? WHERE id=?",
                              (json.dumps(sd, ensure_ascii=False), entity_row["id"]))
@@ -1487,8 +1491,9 @@ def dynamic_options_stream(request: DynamicActionRequest):
         # Phase 2: 后处理
         if full_text:
             try:
-                # 清理可能的 markdown 代码块
-                parsed = json_repair.loads(full_text)
+                # 先正则切出最外层 {...}，防止 DeepSeek 在 JSON 前吐中文前缀
+                _m = re.search(r'\{.*\}', full_text, re.DOTALL)
+                parsed = json_repair.loads(_m.group() if _m else full_text)
                 conn2 = get_db_connection()
                 new_options, spawned_npc, applied_changes, map_result, thought_process, entity_updates_text = \
                     _post_process_dynamic_result(conn2, parsed, request.scene_name,
@@ -1698,7 +1703,7 @@ NPC 背景：{current_desc}
 当前情绪：信任={emo.get('trust',0)} 恐惧={emo.get('fear',0)} 烦躁={emo.get('irritation',0)}
 
 输出严格 JSON，不要多余文字：
-{{"trust_delta": <整数 -10~10>, "fear_delta": <整数 -10~10>, "irritation_delta": <整数 -10~10>, "memory": "<20字内第一人称记忆>"}}"""
+{{"trust_delta": <整数 -25~25>, "fear_delta": <整数 -25~25>, "irritation_delta": <整数 -25~25>, "memory": "<20字内第一人称记忆>"}}"""
 
         usr_p = f"玩家说：{request.player_message}\n{request.npc_name}回复：{request.npc_reply}"
 
@@ -1709,17 +1714,18 @@ NPC 背景：{current_desc}
         memory_text = ""
         try:
             parsed = json_repair.loads(raw)
-            trust_d  = max(-10, min(10, int(parsed.get("trust_delta", 0))))
-            fear_d   = max(-10, min(10, int(parsed.get("fear_delta", 0))))
-            irr_d    = max(-10, min(10, int(parsed.get("irritation_delta", 0))))
+            trust_d  = max(-25, min(25, int(parsed.get("trust_delta", 0))))
+            fear_d   = max(-25, min(25, int(parsed.get("fear_delta", 0))))
+            irr_d    = max(-25, min(25, int(parsed.get("irritation_delta", 0))))
             memory_text = str(parsed.get("memory", "")).strip()[:80]
         except Exception:
             pass
 
-        # ── 更新情绪 ─────────────────────────────────────────────────────────
-        emo["trust"]      = max(-100, min(100, emo.get("trust", 0)      + trust_d))
-        emo["fear"]       = max(-100, min(100, emo.get("fear", 0)       + fear_d))
-        emo["irritation"] = max(-100, min(100, emo.get("irritation", 0) + irr_d))
+        # ── 更新情绪（先衰减，再叠加；烈度穿透阻尼 + trust 背叛放大）──────────
+        tick_emotion_decay(emo)
+        for _key, _d in (("trust", trust_d), ("fear", fear_d), ("irritation", irr_d)):
+            if _d:
+                apply_emotion_delta(emo, _key, _d)
         sd["emotion"] = emo
 
         # ── 更新记忆 ─────────────────────────────────────────────────────────

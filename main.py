@@ -23,7 +23,7 @@ import math
 
 app = fastapi.FastAPI(title="RPG 桌游控制台 API - V5")
 
-# 【安全】：CORS 仅允许本地访问，部署时通过 ALLOWED_ORIGINS 环境变量配置
+# CORS 仅允许本地访问，部署时通过 ALLOWED_ORIGINS 环境变量配置
 # 示例：ALLOWED_ORIGINS=http://localhost:8000,http://192.168.1.100:8000
 _default_origins = [
     "http://127.0.0.1:8000",
@@ -389,7 +389,7 @@ def _startup_wire_agent():
     )
 
 # ---------------------------------------------------------
-# 数据模型定义 (极致折叠，节省行数)
+# 数据模型定义（供 API 请求体使用，CRUD 模型已迁移至各自模块）
 # ---------------------------------------------------------
 class AIContextRequest(BaseModel): scene_name: str = ""; content: str = ""
 # DynamicActionRequest 已移至 agent.py
@@ -891,21 +891,17 @@ def update_stat_labels(req: StatLabelsRequest):
         conn.commit()
     return {"status": "success"}
 
-@app.get("/api/world-entities")
-def get_world_entities():
-    with safe_db() as conn:
-        entities = [dict(row) for row in conn.execute("SELECT * FROM world_entities").fetchall()]
-    return {"entities": entities}
-
 @app.get("/api/game/state")
 def get_game_state():
     with safe_db() as conn:
         n = [dict(row) for row in conn.execute("SELECT * FROM nodes").fetchall()]
         o = [dict(row) for row in conn.execute("SELECT * FROM options").fetchall()]
         c = [dict(row) for row in conn.execute("SELECT * FROM characters").fetchall()]
+        wv_row = conn.execute("SELECT value FROM system_state WHERE key='worldview'").fetchone()
+        worldview = wv_row["value"] if wv_row else ""
     for node in n:
         node["options"] = [opt for opt in o if opt["node_id"] == node["id"]]
-    return {"status": "success", "nodes": n, "characters": c}
+    return {"status": "success", "nodes": n, "characters": c, "worldview": worldview}
 
 @app.post("/api/game/character/{char_id}")
 def update_character(char_id: int, req: CharUpdateRequest):
@@ -1566,8 +1562,10 @@ def export_battle_report():
         )
         report = resp.choices[0].message.content.strip()
         # 同时写入文件
+        report_dir = os.path.join(BASE_DIR, "battle_report")
+        os.makedirs(report_dir, exist_ok=True)
         filename = f"battle_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
-        filepath = os.path.join(BASE_DIR, filename)
+        filepath = os.path.join(report_dir, filename)
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(report)
         return {"status": "success", "report": report, "filename": filename}

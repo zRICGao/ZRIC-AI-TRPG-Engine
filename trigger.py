@@ -1,16 +1,23 @@
 """
 Z.R.I.C 引擎 — 触发器系统模块 (trigger.py)
-关键节点触发器 CRUD + 条件检查。
-支持 AND 门结构：conditions 数组中多个条件全部满足才触发。
-由 main.py 通过 app.include_router(trigger_router) 挂载。
+
+支持功能：
+- DAG 条件树：{"op": "and|or|not", "children": [...]}，旧 AND 列表自动迁移
+- fire_count / cooldown / prerequisite_trigger_ids / exclude_trigger_ids
+- trigger_judgements 表记录 AI 推理过程（含 prompt_hash 去重缓存）
 """
 
+import hashlib
 import json
 import sqlite3
-import fastapi
+import time
 from contextlib import contextmanager
+from datetime import datetime
+
+import fastapi
 from fastapi import APIRouter
 from pydantic import BaseModel
+
 from logger import get_logger
 
 _log = get_logger("trigger")
@@ -34,6 +41,7 @@ def configure_trigger(db_file: str, deepseek_client,
     _deepseek_client = deepseek_client
     _fn_get_system_context = fn_get_system_context
     _fn_append_to_memory = fn_append_to_memory
+    _ensure_schema()
 
 
 def get_db_connection():
@@ -57,28 +65,71 @@ def safe_db():
 
 
 # ---------------------------------------------------------
+# Schema 迁移（幂等，启动时自动执行）
+# ---------------------------------------------------------
+def _ensure_schema():
+    with safe_db() as conn:
+        # triggers 表新增字段
+        for col, typedef in [
+            ("fire_count",               "INTEGER NOT NULL DEFAULT 0"),
+            ("cooldown",                 "INTEGER NOT NULL DEFAULT 0"),
+            ("last_fired_at",            "INTEGER NOT NULL DEFAULT 0"),  # Unix 时间戳，避免时区歧义
+            ("prerequisite_trigger_ids", "TEXT NOT NULL DEFAULT '[]'"),
+            ("exclude_trigger_ids",      "TEXT NOT NULL DEFAULT '[]'"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE triggers ADD COLUMN {col} {typedef}")
+            except sqlite3.OperationalError:
+                pass  # 列已存在
+
+        # trigger_judgements 表（AI 判定审计记录，不作缓存读路径）
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS trigger_judgements (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                trigger_id    INTEGER,
+                scene_id      INTEGER,
+                scene_name    TEXT,
+                timestamp     TEXT,
+                reasoning     TEXT,
+                result        INTEGER,
+                condition_hash TEXT  -- 仅供去重聚合查询，不参与判定逻辑
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_judge_trigger "
+            "ON trigger_judgements(trigger_id)"
+        )
+        conn.commit()
+
+
+# ---------------------------------------------------------
 # Pydantic 数据模型
 # ---------------------------------------------------------
 class ConditionItem(BaseModel):
-    type: str       # scene / item / stat / ai
+    type: str
     value: str = ""
 
 class TriggerCreateRequest(BaseModel):
     label: str = "未命名触发器"
     target_node_id: int
     mode: str = "soft"
-    conditions: list[ConditionItem] = []
-    # 向后兼容旧单条件字段
+    conditions: list | dict = []        # 接受列表（旧）或树（新）
     cond_type: str = ""
     cond_value: str = ""
+    cooldown: int = 0
+    prerequisite_trigger_ids: list[int] = []
+    exclude_trigger_ids: list[int] = []
 
 class TriggerUpdateRequest(BaseModel):
     label: str
     target_node_id: int
     mode: str
-    conditions: list[ConditionItem] = []
+    conditions: list | dict = []
     cond_type: str = ""
     cond_value: str = ""
+    cooldown: int = 0
+    prerequisite_trigger_ids: list[int] = []
+    exclude_trigger_ids: list[int] = []
 
 class CheckTriggersRequest(BaseModel):
     scene_id: int
@@ -87,41 +138,69 @@ class CheckTriggersRequest(BaseModel):
 
 
 # ---------------------------------------------------------
-# 内部工具
+# 条件树：解析 & 规范化
 # ---------------------------------------------------------
-def _get_conditions(trigger_row) -> list[dict]:
-    """从数据库行提取条件列表。优先 conditions JSON，回退旧字段。"""
-    raw = trigger_row["conditions"] if "conditions" in trigger_row.keys() else "[]"
+def _parse_condition_tree(raw: str | None) -> dict:
+    """
+    将数据库 conditions 字段解析为标准树节点。
+    旧格式 [...] 自动升级为 {"op": "and", "children": [...]}。
+    """
+    if not raw:
+        return {"op": "and", "children": []}
     try:
-        conds = json.loads(raw) if raw else []
+        data = json.loads(raw)
     except (json.JSONDecodeError, TypeError):
-        conds = []
-    if conds and isinstance(conds, list):
-        return [{"type": c.get("type", ""), "value": c.get("value", "")} for c in conds if c.get("type")]
-    ct = trigger_row["cond_type"] if "cond_type" in trigger_row.keys() else ""
-    cv = trigger_row["cond_value"] if "cond_value" in trigger_row.keys() else ""
-    if ct:
-        return [{"type": ct, "value": cv}]
+        return {"op": "and", "children": []}
+
+    if isinstance(data, list):
+        # 旧 AND 列表
+        leaves = [{"type": c.get("type", ""), "value": c.get("value", "")}
+                  for c in data if c.get("type")]
+        return {"op": "and", "children": leaves}
+
+    if isinstance(data, dict) and "op" in data:
+        return data
+
+    return {"op": "and", "children": []}
+
+
+def _normalize_conditions(req) -> str:
+    """将请求中的 conditions 字段统一序列化为 JSON 树。"""
+    conds = getattr(req, "conditions", [])
+    if isinstance(conds, dict) and "op" in conds:
+        return json.dumps(conds, ensure_ascii=False)
+    if isinstance(conds, list) and conds:
+        leaves = [{"type": c.type if hasattr(c, "type") else c.get("type",""),
+                   "value": c.value if hasattr(c, "value") else c.get("value","")}
+                  for c in conds]
+        return json.dumps({"op": "and", "children": leaves}, ensure_ascii=False)
+    # 旧单字段回退
+    if getattr(req, "cond_type", ""):
+        return json.dumps({"op": "and", "children": [
+            {"type": req.cond_type, "value": req.cond_value}
+        ]}, ensure_ascii=False)
+    return json.dumps({"op": "and", "children": []}, ensure_ascii=False)
+
+
+def _collect_ai_leaves(node: dict) -> list[str]:
+    """递归收集树中所有 type=='ai' 的叶节点 value。"""
+    if "op" in node:
+        result = []
+        for child in node.get("children", []):
+            result.extend(_collect_ai_leaves(child))
+        return result
+    if node.get("type") == "ai":
+        return [node.get("value", "").strip()]
     return []
 
 
-def _normalize_request_conditions(req) -> str:
-    """将请求中的 conditions（或旧字段）统一序列化为 JSON。"""
-    conds = []
-    if req.conditions:
-        conds = [{"type": c.type, "value": c.value} for c in req.conditions if c.type]
-    elif req.cond_type:
-        conds = [{"type": req.cond_type, "value": req.cond_value}]
-    return json.dumps(conds, ensure_ascii=False)
-
-
 # ---------------------------------------------------------
-# 单条件本地判定
+# 单叶节点本地判定
 # ---------------------------------------------------------
-def _judge_single_condition(cond: dict, scene_id: int, chars: list, all_inv: str) -> bool | None:
-    """返回 True/False 或 None（需要 AI 判断）。"""
-    ctype = cond["type"]
-    cval = cond["value"].strip()
+def _judge_leaf(node: dict, scene_id: int, chars: list, all_inv: str) -> bool | None:
+    """返回 True/False 或 None（需 AI 判断）。"""
+    ctype = node.get("type", "")
+    cval  = node.get("value", "").strip()
 
     if ctype == "scene":
         try:
@@ -129,39 +208,71 @@ def _judge_single_condition(cond: dict, scene_id: int, chars: list, all_inv: str
         except ValueError:
             return False
 
-    elif ctype == "item":
+    if ctype == "item":
         kws = [k.strip().lower() for k in cval.split(",") if k.strip()]
         return any(k in all_inv for k in kws)
 
-    elif ctype == "stat":
-        hit = False
+    if ctype == "stat":
         for part in cval.split(","):
             part = part.strip().lower()
-            for attr in ["hp", "san"]:
+            for attr in ("hp", "san"):
                 if part.startswith(attr + "<"):
                     try:
-                        threshold = int(part.split("<")[1])
-                        if any(c["role"] == "PC" and int(c[attr] or 0) < threshold for c in chars):
-                            hit = True
+                        thr = int(part.split("<")[1])
+                        if any(c["role"] == "PC" and int(c[attr] or 0) < thr for c in chars):
+                            return True
                     except (ValueError, IndexError):
                         pass
-        return hit
+        return False
 
-    elif ctype == "ai":
-        return None
+    if ctype == "ai":
+        return None  # 交给 AI 批判
 
     return False
 
 
 # ---------------------------------------------------------
-# AI 批量判断 (KV-Cache + 结构化思维链 + 防弹级容错)
+# 递归树求值
 # ---------------------------------------------------------
-def _batch_judge_ai(values: list[str], scene_name: str,
-                    scene_content: str, conn) -> list[bool]:
-    if not values:
-        return []
+def _eval_tree(node: dict, scene_id: int, chars: list, all_inv: str,
+               ai_cache: dict, _depth: int = 0) -> bool:
+    if _depth > 8:
+        _log.warning("条件树深度超限（>8），截断求值返回 False")
+        return False
+    if "op" in node:
+        op = node["op"]
+        children = node.get("children", [])
+        if not children:
+            return False
+        if op == "and":
+            return all(_eval_tree(c, scene_id, chars, all_inv, ai_cache, _depth+1) for c in children)
+        if op == "or":
+            return any(_eval_tree(c, scene_id, chars, all_inv, ai_cache, _depth+1) for c in children)
+        if op == "not":
+            return not _eval_tree(children[0], scene_id, chars, all_inv, ai_cache, _depth+1)
+        _log.warning("条件树遇到未知 op: %s，跳过返回 False", op)
+        return False
+    # 叶节点
+    r = _judge_leaf(node, scene_id, chars, all_inv)
+    if r is None:  # ai 类型
+        return ai_cache.get(node.get("value", "").strip(), False)
+    return r
 
-    # 获取系统上下文
+
+# ---------------------------------------------------------
+# AI 批量判断（judgements 表仅作审计，不作缓存读路径）
+# ---------------------------------------------------------
+def _batch_judge_ai(values: list[str], scene_name: str, scene_content: str,
+                    conn, trigger_id: int | None = None,
+                    scene_id: int = 0) -> dict[str, bool]:
+    """
+    返回 {value: bool} 字典。
+    AI 成功时写入 trigger_judgements（审计用）；降级/失败时不落库，避免污染。
+    """
+    if not values:
+        return {}
+
+    # ── 调用 AI ────────────────────────────────────────────────────────────
     worldview, party_status, relevant_lore, session_memory, \
         l1_context, world_entities_text, rag_context, map_context = \
         _fn_get_system_context(conn, scene_name, scene_content)
@@ -169,28 +280,24 @@ def _batch_judge_ai(values: list[str], scene_name: str,
     n = len(values)
     conditions_text = "\n".join(f"{i+1}. {v}" for i, v in enumerate(values))
 
-    # ==========================================
-    # KV-Cache 拓扑设计：严格的 System/User 角色隔离
-    # ==========================================
-
-    # 【静态前缀区】 (映射为 System 角色)
     static_system_prompt = (
         "你是一个严谨的剧情逻辑判定器。\n"
         "你的任务是根据玩家的【最新动作】，判断一组触发条件是否成立。\n\n"
         "--- 基础世界观约束 ---\n"
         f"{worldview}\n\n"
+        "--- 当前世界实体状态 ---\n"
+        f"{world_entities_text}\n\n"
         "--- 判定规则 ---\n"
-        "1. 必须【绝对优先】以 User 提供的【核心动作与场景】作为判定依据。即使玩家动作与世界观有冲突，也以玩家动作为准。\n"
-        "2. 必须严格返回 JSON。为了保证判定准确，请务必先进行一句话短推理，再输出结果。\n"
-        "3. JSON 格式必须严格遵循以下结构：\n"
+        "1. 必须【绝对优先】以 User 提供的【核心动作与场景】作为判定依据。\n"
+        "2. 必须严格返回 JSON，先进行一句话短推理，再输出结果。\n"
+        "3. JSON 格式：\n"
         "{\n"
-        "  \"reasoning\": \"简短的逻辑推演（限50字以内，不要长篇大论）\",\n"
+        "  \"reasoning\": \"简短的逻辑推演（限50字以内）\",\n"
         "  \"results\": [true, false, ...]\n"
         "}\n"
-        f"4. results 数组长度必须恰好匹配条件数量 ({n} 个)，顺序严格一致。"
+        f"4. results 数组长度必须恰好为 {n}，顺序与条件一致。"
     )
 
-    # 【动态后缀区】 (映射为 User 角色)
     dynamic_user_prompt = (
         "【近期记忆】\n"
         f"{session_memory}\n\n"
@@ -205,76 +312,107 @@ def _batch_judge_ai(values: list[str], scene_name: str,
         f"{conditions_text}"
     )
 
+    raw_results: list[bool] = [False] * n
+    reasoning = ""
+    ai_succeeded = False
+
     try:
         resp = _deepseek_client.chat.completions.create(
             model="deepseek-chat",
             messages=[
                 {"role": "system", "content": static_system_prompt},
-                {"role": "user", "content": dynamic_user_prompt}
+                {"role": "user",   "content": dynamic_user_prompt},
             ],
             temperature=0.1,
-            max_tokens=600 + 10 * n, # 大幅度放宽长度
-            response_format={"type": "json_object"}
+            max_tokens=600 + 10 * n,
+            response_format={"type": "json_object"},
         )
-        
-        # 【拦截物理截断】
         if resp.choices[0].finish_reason == "length":
-            _log.warning("AI 触发器推理过长被截断，启用降级防护。")
-            return [False] * n
-            
-        raw_ai_content = resp.choices[0].message.content
-        parsed = json.loads(raw_ai_content)
-        
-        # 调试开关：排查触发器不准时，可以取消注释下面这行，看 AI 的内心戏
-        # _log.info(f"触发器推演逻辑: {parsed.get('reasoning')}")
-        
-        results = parsed.get("results", [])
-        if len(results) != n:
-            return [False] * n
-        return [bool(r) for r in results]
-        
-    # 【拦截残缺 JSON 解析崩溃】
-    except json.JSONDecodeError as e:
-        _log.error(f"AI 返回的 JSON 格式破损: {e}")
-        try:
-            _log.error(f"破损内容: {raw_ai_content[:100]}...{raw_ai_content[-100:]}")
-        except:
-            pass
-        return [False] * n
+            _log.warning("AI 触发器推理被截断，降级为全 False，不写缓存")
+        else:
+            parsed = json.loads(resp.choices[0].message.content)
+            reasoning = parsed.get("reasoning", "")
+            _log.info("触发器推演逻辑: %s", reasoning)
+            results = parsed.get("results", [])
+            if len(results) == n:
+                raw_results = [bool(r) for r in results]
+                ai_succeeded = True
+            else:
+                _log.warning("AI 返回 results 长度 %d ≠ 期望 %d，降级", len(results), n)
     except Exception as e:
-        _log.warning(f"AI 触发器批量判断失败: {e}")
-        return [False] * n
-    
+        _log.warning("AI 触发器批量判断失败: %s", e)
+
+    result_map: dict[str, bool] = dict(zip(values, raw_results))
+
+    # ── 仅在 AI 成功时写入审计表，失败/降级不落库避免缓存污染 ──────────────
+    if ai_succeeded:
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        for i, (val, res) in enumerate(zip(values, raw_results)):
+            note = reasoning if i == 0 else f"(batch #{trigger_id} 共 {n} 条)"
+            conn.execute(
+                "INSERT INTO trigger_judgements "
+                "(trigger_id, scene_id, scene_name, timestamp, reasoning, result, condition_hash) "
+                "VALUES (?,?,?,?,?,?,?)",
+                (trigger_id, scene_id, scene_name, ts, note, int(res),
+                 hashlib.md5(val.strip().encode()).hexdigest()),
+            )
+        # 注意：不在此处 commit，由调用方（check_triggers）统一提交
+
+    return result_map
+
 
 # ---------------------------------------------------------
-# AND 门检查
+# 触发器完整检查（含 DAG、前驱、互斥、冷却）
 # ---------------------------------------------------------
-def _check_trigger_and(trigger_row, scene_id: int, scene_name: str,
-                        scene_content: str, chars: list, all_inv: str,
-                        ai_cache: dict, conn) -> bool:
-    """所有条件都满足才返回 True。ai_cache 跨触发器共享避免重复调用。"""
-    conditions = _get_conditions(trigger_row)
-    if not conditions:
+def _check_trigger(trigger_row, scene_id: int, scene_name: str,
+                   scene_content: str, chars: list, all_inv: str,
+                   ai_cache: dict, conn) -> bool:
+    t = trigger_row
+
+    # ── 前驱：所有前驱触发器必须已 fire ────────────────────────────────────
+    try:
+        prereq_ids = json.loads(t["prerequisite_trigger_ids"] or "[]")
+    except (TypeError, json.JSONDecodeError):
+        prereq_ids = []
+    if prereq_ids:
+        for pid in prereq_ids:
+            row = conn.execute("SELECT fire_count, fired FROM triggers WHERE id=?", (pid,)).fetchone()
+            if not row or (row["fire_count"] == 0 and row["fired"] == 0):
+                return False
+
+    # ── 互斥：所有排斥触发器必须未 fire ────────────────────────────────────
+    try:
+        excl_ids = json.loads(t["exclude_trigger_ids"] or "[]")
+    except (TypeError, json.JSONDecodeError):
+        excl_ids = []
+    if excl_ids:
+        for eid in excl_ids:
+            row = conn.execute("SELECT fire_count, fired FROM triggers WHERE id=?", (eid,)).fetchone()
+            if row and (row["fire_count"] > 0 or row["fired"] == 1):
+                return False
+
+    # ── 冷却检查 ────────────────────────────────────────────────────────────
+    cooldown = t["cooldown"] if "cooldown" in t.keys() else 0
+    if cooldown and cooldown > 0:
+        last_ts = t["last_fired_at"] if "last_fired_at" in t.keys() else 0
+        if last_ts and (time.time() - int(last_ts)) < cooldown:
+            return False
+
+    # ── 条件树求值 ──────────────────────────────────────────────────────────
+    tree = _parse_condition_tree(t["conditions"] if "conditions" in t.keys() else "[]")
+    if not tree.get("children"):
         return False
 
-    # 收集需要 AI 判断的新条件
-    new_ai = [c["value"] for c in conditions
-              if c["type"] == "ai" and c["value"] not in ai_cache]
+    # 收集未缓存的 AI 条件，批量请求
+    ai_leaves = _collect_ai_leaves(tree)
+    new_ai = [v for v in ai_leaves if v and v not in ai_cache]
     if new_ai:
         unique = list(dict.fromkeys(new_ai))
-        results = _batch_judge_ai(unique, scene_name, scene_content, conn)
-        for val, res in zip(unique, results):
-            ai_cache[val] = res
+        batch = _batch_judge_ai(unique, scene_name, scene_content, conn,
+                                trigger_id=t["id"], scene_id=scene_id)
+        ai_cache.update(batch)
 
-    # AND 判定
-    for c in conditions:
-        if c["type"] == "ai":
-            if not ai_cache.get(c["value"], False):
-                return False
-        else:
-            if not _judge_single_condition(c, scene_id, chars, all_inv):
-                return False
-    return True
+    return _eval_tree(tree, scene_id, chars, all_inv, ai_cache)
 
 
 # ---------------------------------------------------------
@@ -285,12 +423,19 @@ def get_triggers():
     with safe_db() as conn:
         rows = [dict(r) for r in conn.execute("SELECT * FROM triggers ORDER BY id").fetchall()]
     for r in rows:
-        try:
-            r["conditions"] = json.loads(r.get("conditions", "[]") or "[]")
-        except (json.JSONDecodeError, TypeError):
-            r["conditions"] = []
-        if not r["conditions"] and r.get("cond_type"):
-            r["conditions"] = [{"type": r["cond_type"], "value": r["cond_value"]}]
+        tree = _parse_condition_tree(r.get("conditions", "[]"))
+        r["conditions"] = tree
+        r.setdefault("fire_count", 0)
+        r.setdefault("cooldown", 0)
+        r.setdefault("last_fired_at", "")
+        r.setdefault("prerequisite_trigger_ids", [])
+        r.setdefault("exclude_trigger_ids", [])
+        for fld in ("prerequisite_trigger_ids", "exclude_trigger_ids"):
+            if isinstance(r[fld], str):
+                try:
+                    r[fld] = json.loads(r[fld])
+                except (json.JSONDecodeError, TypeError):
+                    r[fld] = []
     return {"status": "success", "triggers": rows}
 
 
@@ -299,13 +444,17 @@ def create_trigger(req: TriggerCreateRequest):
     with safe_db() as conn:
         if not conn.execute("SELECT id FROM nodes WHERE id=?", (req.target_node_id,)).fetchone():
             raise fastapi.HTTPException(status_code=400, detail="目标节点不存在")
-        conditions_json = _normalize_request_conditions(req)
-        conds = json.loads(conditions_json)
-        ft = conds[0]["type"] if conds else req.cond_type
-        fv = conds[0]["value"] if conds else req.cond_value
+        conditions_json = _normalize_conditions(req)
         c = conn.execute(
-            "INSERT INTO triggers (label, target_node_id, mode, cond_type, cond_value, conditions) VALUES (?,?,?,?,?,?)",
-            (req.label[:80], req.target_node_id, req.mode, ft, fv[:200], conditions_json)
+            "INSERT INTO triggers "
+            "(label, target_node_id, mode, cond_type, cond_value, conditions, "
+            " cooldown, prerequisite_trigger_ids, exclude_trigger_ids) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (req.label[:80], req.target_node_id, req.mode,
+             req.cond_type, req.cond_value[:200],
+             conditions_json, req.cooldown,
+             json.dumps(req.prerequisite_trigger_ids),
+             json.dumps(req.exclude_trigger_ids))
         )
         conn.commit()
     return {"status": "success", "id": c.lastrowid}
@@ -316,13 +465,18 @@ def update_trigger(tid: int, req: TriggerUpdateRequest):
     with safe_db() as conn:
         if not conn.execute("SELECT id FROM nodes WHERE id=?", (req.target_node_id,)).fetchone():
             raise fastapi.HTTPException(status_code=400, detail="目标节点不存在")
-        conditions_json = _normalize_request_conditions(req)
-        conds = json.loads(conditions_json)
-        ft = conds[0]["type"] if conds else req.cond_type
-        fv = conds[0]["value"] if conds else req.cond_value
+        conditions_json = _normalize_conditions(req)
         conn.execute(
-            "UPDATE triggers SET label=?, target_node_id=?, mode=?, cond_type=?, cond_value=?, conditions=?, fired=0 WHERE id=?",
-            (req.label[:80], req.target_node_id, req.mode, ft, fv[:200], conditions_json, tid)
+            "UPDATE triggers SET label=?, target_node_id=?, mode=?, "
+            "cond_type=?, cond_value=?, conditions=?, fired=0, fire_count=0, "
+            "cooldown=?, prerequisite_trigger_ids=?, exclude_trigger_ids=? "
+            "WHERE id=?",
+            (req.label[:80], req.target_node_id, req.mode,
+             req.cond_type, req.cond_value[:200],
+             conditions_json, req.cooldown,
+             json.dumps(req.prerequisite_trigger_ids),
+             json.dumps(req.exclude_trigger_ids),
+             tid)
         )
         conn.commit()
     return {"status": "success"}
@@ -339,46 +493,79 @@ def delete_trigger(tid: int):
 @trigger_router.post("/api/game/trigger/{tid}/reset")
 def reset_trigger(tid: int):
     with safe_db() as conn:
-        conn.execute("UPDATE triggers SET fired=0 WHERE id=?", (tid,))
+        conn.execute(
+            "UPDATE triggers SET fired=0, fire_count=0, last_fired_at=0 WHERE id=?",
+            (tid,)
+        )
         conn.commit()
     return {"status": "success"}
 
 
+@trigger_router.get("/api/game/trigger-judgements")
+def get_trigger_judgements(limit: int = 50):
+    """查询最近的 AI 判定记录，供 GM 追溯。"""
+    with safe_db() as conn:
+        rows = [dict(r) for r in conn.execute(
+            "SELECT * FROM trigger_judgements ORDER BY id DESC LIMIT ?", (limit,)
+        ).fetchall()]
+    return {"status": "success", "judgements": rows}
+
+
 @trigger_router.post("/api/game/check-triggers")
 def check_triggers(req: CheckTriggersRequest):
-    """检查所有未触发的触发器（AND 多条件）。"""
+    """检查所有符合条件的触发器（DAG 条件树）。"""
     conn = get_db_connection()
     try:
-        pending = conn.execute("SELECT * FROM triggers WHERE fired=0").fetchall()
+        # 取未永久封锁的触发器（fired=0 或 cooldown>0 允许重复触发）
+        pending = conn.execute(
+            "SELECT * FROM triggers WHERE fired=0 OR cooldown>0"
+        ).fetchall()
         if not pending:
             conn.close()
             return {"status": "success", "fired": []}
 
-        chars = conn.execute("SELECT * FROM characters").fetchall()
-        all_inv = " ".join([(c["inventory"] or "").lower() for c in chars])
-        ai_cache = {}
+        chars = [dict(r) for r in conn.execute("SELECT * FROM characters").fetchall()]
+        all_inv = " ".join([(c.get("inventory") or "").lower() for c in chars])
+        ai_cache: dict[str, bool] = {}
 
         fired_results = []
         for t in pending:
-            if _check_trigger_and(t, req.scene_id, req.scene_name,
-                                   req.scene_content, chars, all_inv, ai_cache, conn):
-                conn.execute("UPDATE triggers SET fired=1 WHERE id=?", (t["id"],))
-                target_node = conn.execute(
-                    "SELECT * FROM nodes WHERE id=?", (t["target_node_id"],)
-                ).fetchone()
-                fired_results.append({
-                    "trigger_id":       t["id"],
-                    "label":            t["label"],
-                    "mode":             t["mode"],
-                    "target_node_id":   t["target_node_id"],
-                    "target_node_name": target_node["name"] if target_node else "未知节点",
-                })
-                if _fn_append_to_memory:
-                    _fn_append_to_memory(conn, f"关键触发器「{t['label']}」已触发，剧情指向节点[{t['target_node_id']}]。")
+            if not _check_trigger(t, req.scene_id, req.scene_name,
+                                   req.scene_content, chars, all_inv,
+                                   ai_cache, conn):
+                continue
+
+            now_ts = int(time.time())
+            # 只有 cooldown==0 时才永久标 fired=1（单次触发语义保留）
+            new_fired = 1 if (t["cooldown"] if "cooldown" in t.keys() else 0) == 0 else t["fired"]
+            new_count = (t["fire_count"] if "fire_count" in t.keys() else 0) + 1
+            conn.execute(
+                "UPDATE triggers SET fired=?, fire_count=?, last_fired_at=? WHERE id=?",
+                (new_fired, new_count, now_ts, t["id"])
+            )
+
+            target_node = conn.execute(
+                "SELECT * FROM nodes WHERE id=?", (t["target_node_id"],)
+            ).fetchone()
+            fired_results.append({
+                "trigger_id":       t["id"],
+                "label":            t["label"],
+                "mode":             t["mode"],
+                "target_node_id":   t["target_node_id"],
+                "target_node_name": target_node["name"] if target_node else "未知节点",
+                "fire_count":       new_count,
+            })
+
+            if _fn_append_to_memory:
+                _fn_append_to_memory(
+                    conn,
+                    f"关键触发器「{t['label']}」已触发（第{new_count}次），"
+                    f"剧情指向节点[{t['target_node_id']}]。"
+                )
 
         conn.commit()
         conn.close()
         return {"status": "success", "fired": fired_results}
-    except Exception as e:
+    except Exception:
         conn.close()
         raise

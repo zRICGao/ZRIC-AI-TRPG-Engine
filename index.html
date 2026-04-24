@@ -3578,8 +3578,9 @@ createApp({
             if(!isNew||isEditMode.value)return;
 
             // 【新调用顺序 Phase 2→3】：先执行副作用，再用最新状态扩写叙事
-            // apply 返回 fx_context（确定结果摘要）供 expand 使用，无需再读 pending_effects
+            // 仅通过选项跳转时执行，手动点击场景节点不触发任何推演副作用
             try {
+                if (optionText) {
                 // Phase 2：执行副作用（状态、记忆、情绪立即写入数据库）
                 const needExpand = !next.expanded_content;
                 const { fxContext, actionType } = await applyBranchEffects(next.id);
@@ -3595,6 +3596,7 @@ createApp({
                         actionType
                     );
                 }
+                } // end if (optionText)
 
                 // Phase 4：只有通过选项正常推进时才同步地图位置
                 // GM 从节点树手动跳转（optionText 为空）不同步，避免地图瞬移破坏叙事逻辑
