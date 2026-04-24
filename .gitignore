@@ -29,8 +29,8 @@ campaigns/*
 !campaigns/苏黎世恋曲/
 !campaigns/空白剧本/
 
-# 没做好
-phone*.html
+# 做好了
+done/
 
 # 战报
 battle_report_*.md

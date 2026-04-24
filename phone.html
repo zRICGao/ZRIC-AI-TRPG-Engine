@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>通讯</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+<style>
+:root {
+  --green: #07c160;
+  --green-bubble: #95ec69;
+  --bg: #ededed;
+  --header: #f7f7f7;
+  --divider: #e0e0e0;
+  --tab-inactive: #9a9a9a;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+::-webkit-scrollbar { width: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", sans-serif;
+  background: var(--bg); overflow: hidden; color: #1a1a1a;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── 页面切换动画 ── */
+.slide-enter-active { animation: slideIn .25s cubic-bezier(.4,0,.2,1); }
+@keyframes slideIn { from { transform: translateX(100%); } to { transform: translateX(0); } }
+
+/* ── 联系人列表 ── */
+.contact-row {
+  display: flex; align-items: center; gap: 13px;
+  padding: 12px 16px; background: #fff; cursor: pointer;
+  position: relative; transition: background .1s;
+}
+.contact-row:active { background: #d5d5d5; }
+.contact-row::after {
+  content: ''; position: absolute; bottom: 0; left: 69px; right: 0;
+  height: .5px; background: var(--divider);
+}
+.contact-row:last-child::after { display: none; }
+
+/* ── 头像 ── */
+.ava {
+  width: 46px; height: 46px; border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 19px; font-weight: 700; color: #fff;
+  flex-shrink: 0; position: relative; user-select: none;
+}
+.ava-sm { width: 40px; height: 40px; border-radius: 7px; font-size: 16px; }
+
+/* ── 情绪环 ── */
+.emo-ring {
+  position: absolute; inset: -2px; border-radius: 10px;
+  pointer-events: none;
+}
+
+/* ── 气泡尾 ── */
+.bubble-npc { position: relative; }
+.bubble-npc::before {
+  content: ''; position: absolute; top: 11px; left: -6px;
+  border: 6px solid transparent; border-right-color: #fff; border-left: 0;
+}
+.bubble-player { position: relative; }
+.bubble-player::before {
+  content: ''; position: absolute; top: 11px; right: -6px;
+  border: 6px solid transparent; border-left-color: var(--green-bubble); border-right: 0;
+}
+
+/* ── 输入栏 ── */
+.input-bar {
+  background: var(--header); border-top: .5px solid var(--divider);
+  display: flex; align-items: flex-end; gap: 8px;
+  padding: 8px 12px; padding-bottom: max(8px, env(safe-area-inset-bottom));
+}
+.input-bar textarea {
+  flex: 1; background: #fff; border: .5px solid #d0d0d0; border-radius: 6px;
+  padding: 8px 10px; font-size: 16px; line-height: 1.4; font-family: inherit;
+  resize: none; outline: none; max-height: 100px; overflow-y: auto; color: #1a1a1a;
+}
+.input-bar textarea:focus { border-color: #b0b0b0; }
+
+/* ── 底部 Tab ── */
+.tab-bar {
+  display: flex; background: var(--header);
+  border-top: .5px solid #d6d6d6;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.tab-item {
+  flex: 1; display: flex; flex-direction: column; align-items: center;
+  gap: 2px; padding: 6px 0 4px; cursor: pointer;
+}
+.tab-label { font-size: 10px; }
+
+/* ── 打字动画 ── */
+.dots { display: inline-flex; gap: 3px; vertical-align: middle; }
+.dots span {
+  width: 5px; height: 5px; border-radius: 50%; background: #aaa;
+  animation: dotBounce .9s infinite;
+}
+.dots span:nth-child(2) { animation-delay: .15s; }
+.dots span:nth-child(3) { animation-delay: .30s; }
+@keyframes dotBounce {
+  0%,60%,100% { transform: translateY(0); opacity: .4; }
+  30% { transform: translateY(-4px); opacity: 1; }
+}
+
+/* ── 情绪条 ── */
+.emo-bar { height: 3px; border-radius: 2px; transition: width .4s; }
+
+/* ── 未读红点 ── */
+.unread-dot {
+  width: 9px; height: 9px; border-radius: 50%; background: #f55; flex-shrink: 0;
+}
+
+/* ── 在线绿点 ── */
+.online-dot {
+  position: absolute; bottom: -2px; right: -2px;
+  width: 9px; height: 9px; border-radius: 50%;
+  border: 1.5px solid #fff;
+}
+</style>
+</head>
+<body>
+<div id="app" class="flex flex-col h-screen max-w-md mx-auto shadow-2xl overflow-hidden relative" style="background:var(--bg)">
+
+  <!-- ══════════════════════════════════════════
+       联系人列表页
+  ══════════════════════════════════════════ -->
+  <div v-show="page === 'list'" class="flex flex-col h-full">
+
+    <!-- 顶栏 -->
+    <div class="flex items-center justify-between px-4 pt-10 pb-2" style="background:var(--header);border-bottom:.5px solid var(--divider)">
+      <span class="text-[18px] font-semibold">通讯录</span>
+      <svg @click="refreshContacts" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#555" stroke-width="2" stroke-linecap="round" class="cursor-pointer" :class="{'animate-spin': loading}"><path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+    </div>
+
+    <!-- 搜索框 -->
+    <div class="px-3 py-2" style="background:var(--header)">
+      <div class="flex items-center gap-2 px-3 py-1.5 rounded-lg" style="background:#e5e5e5">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#999" stroke-width="2.5" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input v-model="searchQ" placeholder="搜索联系人" class="bg-transparent text-[13px] outline-none flex-1" style="color:#555">
+      </div>
+    </div>
+
+    <!-- 列表主体 -->
+    <div class="flex-1 overflow-y-auto" style="background:#f2f2f2">
+
+      <!-- 加载中 -->
+      <div v-if="loading" class="flex flex-col items-center justify-center py-24 gap-3 text-gray-400 text-sm">
+        <svg class="animate-spin" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.22-8.56"/></svg>
+        正在同步联系人…
+      </div>
+
+      <!-- 无联系人 -->
+      <div v-else-if="filteredContacts.length === 0" class="flex flex-col items-center justify-center py-24 gap-3">
+        <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="#ccc" stroke-width="1.3"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        <span class="text-sm text-gray-400">{{ searchQ ? '未找到匹配的联系人' : '暂无已交互的 NPC' }}</span>
+        <span v-if="!searchQ" class="text-xs text-gray-300 text-center px-8">在主线剧情中与 NPC 发生互动后，他们会出现在这里</span>
+        <!-- DEBUG 信息 -->
+        <div class="text-[10px] text-gray-300 mt-4 px-6 text-center break-all" v-if="debugInfo">{{ debugInfo }}</div>
+      </div>
+
+      <!-- 联系人分组 -->
+      <div v-else>
+        <!-- 活跃 NPC -->
+        <div v-if="activeGroup.length">
+          <div class="px-4 py-1.5 text-[11px] font-medium" style="color:#999;background:#f2f2f2">在线</div>
+          <div v-for="npc in activeGroup" :key="npc.id" class="contact-row" @click="openChat(npc)">
+            <div class="ava" :style="{ background: npc.avatarColor }">
+              {{ npc.name.charAt(0) }}
+              <div class="online-dot" style="background:#44b349"></div>
+            </div>
+            <div class="flex-1 min-w-0">
+              <div class="flex justify-between items-baseline">
+                <span class="font-medium text-[15px] truncate">{{ npc.name }}</span>
+                <span class="text-[11px] ml-2 flex-shrink-0" style="color:#aaa">{{ npc.lastTime }}</span>
+              </div>
+              <div class="text-[12px] truncate mt-0.5" style="color:#888">
+                {{ npc.lastMsg || '暂无消息' }}
+              </div>
+            </div>
+            <div v-if="npc.unread" class="unread-dot"></div>
+          </div>
+        </div>
+
+        <!-- 离线 NPC -->
+        <div v-if="inactiveGroup.length">
+          <div class="px-4 py-1.5 text-[11px] font-medium" style="color:#999;background:#f2f2f2">离线</div>
+          <div v-for="npc in inactiveGroup" :key="npc.id" class="contact-row" @click="openChat(npc)" style="opacity:.75">
+            <div class="ava" :style="{ background: npc.avatarColor }">
+              {{ npc.name.charAt(0) }}
+              <div class="online-dot" style="background:#ccc"></div>
+            </div>
+            <div class="flex-1 min-w-0">
+              <div class="flex justify-between items-baseline">
+                <span class="font-medium text-[15px] truncate">{{ npc.name }}</span>
+                <span class="text-[11px] ml-2 flex-shrink-0" style="color:#aaa">{{ npc.lastTime }}</span>
+              </div>
+              <div class="text-[12px] truncate mt-0.5" style="color:#aaa">{{ npc.lastMsg || npc.description || '暂无消息' }}</div>
+            </div>
+            <div v-if="npc.unread" class="unread-dot"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 底部 Tab -->
+    <div class="tab-bar">
+      <div class="tab-item">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="var(--green)"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/></svg>
+        <span class="tab-label" style="color:var(--green)">消息</span>
+      </div>
+      <div class="tab-item">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--tab-inactive)" stroke-width="1.8"><circle cx="12" cy="8" r="4"/><path d="M20 21a8 8 0 1 0-16 0"/></svg>
+        <span class="tab-label" style="color:var(--tab-inactive)">联系人</span>
+      </div>
+      <div class="tab-item">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--tab-inactive)" stroke-width="1.8"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>
+        <span class="tab-label" style="color:var(--tab-inactive)">动态</span>
+      </div>
+      <div class="tab-item">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--tab-inactive)" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93l-1.41 1.41M4.93 4.93l1.41 1.41M4.93 19.07l1.41-1.41M19.07 19.07l-1.41-1.41M20 12h2M2 12h2M12 20v2M12 2v2"/></svg>
+        <span class="tab-label" style="color:var(--tab-inactive)">设置</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════
+       聊天页
+  ══════════════════════════════════════════ -->
+  <div v-show="page === 'chat'" class="flex flex-col h-full" :class="{'slide-enter-active': chatSlide}">
+
+    <!-- 顶栏 -->
+    <div class="flex items-center px-3 pt-10 pb-2.5" style="background:var(--header);border-bottom:.5px solid var(--divider)">
+      <div @click="goBack" class="flex items-center gap-0.5 cursor-pointer pr-3 py-1">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#1a1a1a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+      </div>
+      <div class="flex-1 flex flex-col items-center pr-7">
+        <span class="text-[17px] font-semibold truncate max-w-[60vw]">{{ active?.name }}</span>
+        <!-- 情绪状态行 -->
+        <div class="flex gap-2 text-[10px] mt-0.5" style="color:#aaa" v-if="active">
+          <span :style="{ color: trustColor(active.trust) }">信任 {{ active.trust > 0 ? '+' : '' }}{{ active.trust }}</span>
+          <span>恐惧 {{ active.fear }}</span>
+          <span :style="{ color: active.irritation >= 40 ? '#e74c3c' : '#aaa' }">烦躁 {{ active.irritation }}</span>
+        </div>
+      </div>
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#555" stroke-width="2"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+    </div>
+
+    <!-- 消息区 -->
+    <div class="flex-1 overflow-y-auto px-3 py-3" id="msg-scroll" style="background:var(--bg)">
+      <!-- 时间戳 -->
+      <div class="text-center mb-4">
+        <span class="text-[11px] px-2 py-0.5 rounded" style="color:#888;background:#cecece">{{ timeLabel }}</span>
+      </div>
+
+      <div v-for="(m, i) in messages" :key="i" class="flex mb-3" :class="m.role === 'player' ? 'justify-end' : 'justify-start'">
+
+        <!-- NPC 头像 -->
+        <div v-if="m.role === 'npc'" class="ava ava-sm flex-shrink-0 mr-2.5 mt-0.5" :style="{ background: active?.avatarColor }">
+          {{ active?.name?.charAt(0) || '?' }}
+        </div>
+
+        <!-- 气泡 -->
+        <div class="max-w-[72%] px-3 py-2 text-[15.5px] leading-relaxed break-words"
+             :class="m.role === 'player'
+               ? 'bg-[#95ec69] rounded-xl rounded-tr-sm bubble-player'
+               : 'bg-white rounded-xl rounded-tl-sm bubble-npc'">
+          <span>{{ m.content }}</span>
+          <span v-if="m.typing && !m.content" class="dots"><span></span><span></span><span></span></span>
+          <span v-else-if="m.typing" class="dots ml-1"><span></span><span></span><span></span></span>
+        </div>
+
+        <!-- 玩家头像 -->
+        <div v-if="m.role === 'player'" class="ava ava-sm flex-shrink-0 ml-2.5 mt-0.5" style="background:#65a0ea">我</div>
+      </div>
+    </div>
+
+    <!-- 输入栏 -->
+    <div class="input-bar">
+      <svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="#888" stroke-width="1.8" class="flex-shrink-0 mb-0.5"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+      <textarea v-model="input" @keydown.enter.exact.prevent="send" ref="inputEl"
+                placeholder="发送消息…" :disabled="waiting" rows="1"></textarea>
+      <div v-if="input.trim()" @click="send"
+           class="flex-shrink-0 w-14 h-9 rounded-md flex items-center justify-center text-white text-[15px] font-medium cursor-pointer select-none active:opacity-80"
+           style="background:var(--green)">发送</div>
+      <svg v-else width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="#888" stroke-width="1.8" class="flex-shrink-0 mb-0.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const { createApp, ref, reactive, computed, nextTick, onMounted } = Vue;
+const API = (window.location.origin === 'null' || window.location.protocol === 'file:')
+  ? 'http://127.0.0.1:8000'
+  : window.location.origin;
+
+const COLORS = ['#4a90d9','#e6715a','#f5a623','#7b68ee','#50c878','#e84393','#00b894','#6c5ce7','#fd9644','#eb3b5a','#3867d6','#8854d0','#20bf6b'];
+function hashColor(n) {
+  let h = 0;
+  for (let i = 0; i < n.length; i++) h = ((h << 5) - h + n.charCodeAt(i)) | 0;
+  return COLORS[Math.abs(h) % COLORS.length];
+}
+
+function parseEmotion(emo) {
+  if (!emo) return { trust: 0, fear: 0, irritation: 0 };
+  return {
+    trust: emo.trust ?? 0,
+    fear: emo.fear ?? 0,
+    irritation: emo.irritation ?? 0,
+  };
+}
+
+function emoTagFromEmo(emo) {
+  const { trust = 0, fear = 0, irritation = 0 } = emo;
+  if (irritation >= 60) return '[非常烦躁]';
+  if (irritation >= 30) return '[有些不耐烦]';
+  if (fear >= 50) return '[很紧张]';
+  if (fear >= 25) return '[有点不安]';
+  if (trust >= 50) return '[对你很信任]';
+  if (trust >= 20) return '[好感上升]';
+  if (trust <= -30) return '[对你很戒备]';
+  return '';
+}
+
+createApp({
+  setup() {
+    const page = ref('list');
+    const chatSlide = ref(false);
+    const loading = ref(true);
+    const contacts = ref([]);
+    const debugInfo = ref('');
+    const searchQ = ref('');
+    const active = ref(null);
+    const messages = ref([]);
+    const input = ref('');
+    const waiting = ref(false);
+    const inputEl = ref(null);
+    // 各 NPC 聊天缓存 { name: [...msgs] }（内存，同步自 localStorage）
+    const chatCache = reactive({});
+    let campaignKey = 'default';   // 由 worldview 哈希确定，refreshContacts 后赋值
+
+    function hashStr(s) {
+      let h = 0;
+      for (let i = 0; i < Math.min(s.length, 200); i++) h = (Math.imul(31, h) + s.charCodeAt(i)) | 0;
+      return (h >>> 0).toString(36);
+    }
+    function lsKey(npcName) { return `phone_chat_${campaignKey}:${npcName}`; }
+    function loadCache(npcName) {
+      try { return JSON.parse(localStorage.getItem(lsKey(npcName)) || 'null'); } catch { return null; }
+    }
+    function saveCache(npcName, msgs) {
+      try { localStorage.setItem(lsKey(npcName), JSON.stringify(msgs)); } catch {}
+    }
+
+    const timeLabel = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
+
+    // ── 联系人 ──────────────────────────────────────────────────────────────
+    const refreshContacts = async () => {
+      loading.value = true;
+      debugInfo.value = '';
+      try {
+        const [entRes, charRes] = await Promise.all([
+          fetch(`${API}/api/world-entities`),
+          fetch(`${API}/api/game/state`),
+        ]);
+        if (!entRes.ok) throw new Error(`world-entities HTTP ${entRes.status}`);
+        if (!charRes.ok) throw new Error(`game/state HTTP ${charRes.status}`);
+        const entData = await entRes.json();
+        const charData = await charRes.json();
+        campaignKey = hashStr(charData.worldview || '');
+
+        const npcEntities = (entData.entities || []).filter(e => e.entity_type === 'npc');
+        const npcChars = (charData.characters || []).filter(c => c.role === 'NPC');
+        debugInfo.value = `API=${API} | world-entities总数:${(entData.entities||[]).length} npc:${npcEntities.length} | characters总数:${(charData.characters||[]).length} NPC:${npcChars.length}`;
+        const charSet = new Set(npcChars.map(c => c.name));
+
+        const map = new Map();
+
+        for (const e of npcEntities) {
+          let sd = {};
+          try {
+            const raw = e.state_desc || '';
+            sd = raw.trim().startsWith('{') ? JSON.parse(raw) : { desc: raw };
+          } catch (_) { sd = { desc: e.state_desc || '' }; }
+          sd.emotion = sd.emotion || { trust: 0, fear: 0, irritation: 0 };
+          sd.memory = sd.memory || [];
+
+          const emo = parseEmotion(sd.emotion);
+          map.set(e.name, {
+            id: e.id,
+            name: e.name,
+            status: e.status || 'active',
+            description: sd.desc || '',
+            location: e.location || '',
+            avatarColor: hashColor(e.name),
+            emoTag: emoTagFromEmo(emo),
+            lastMsg: (() => { const m = sd.memory.filter(x => x.startsWith('[私聊]')); return m.length ? m[m.length-1].replace(/^\[私聊\]\s*/, '') : ''; })(),
+            lastTime: e.updated_at ? e.updated_at.slice(5, 16) : '',
+            unread: false,
+            trust: emo.trust,
+            fear: emo.fear,
+            irritation: emo.irritation,
+          });
+        }
+
+        // 补充只在 characters 表有、world_entities 没有的 NPC
+        for (const c of npcChars) {
+          if (!map.has(c.name)) {
+            map.set(c.name, {
+              id: c.id + 90000,
+              name: c.name,
+              status: c.status || 'active',
+              description: c.inventory || '',
+              location: '',
+              avatarColor: hashColor(c.name),
+              emoTag: '',
+              lastMsg: '',
+              lastTime: '',
+              unread: false,
+              trust: 0, fear: 0, irritation: 0,
+            });
+          }
+        }
+
+        contacts.value = [...map.values()].sort((a, b) => {
+          if (a.status === 'active' && b.status !== 'active') return -1;
+          if (a.status !== 'active' && b.status === 'active') return 1;
+          return (b.lastTime || '').localeCompare(a.lastTime || '');
+        });
+      } catch (e) {
+        console.error('加载联系人失败', e);
+        debugInfo.value = `错误: ${e.message}`;
+      } finally {
+        loading.value = false;
+      }
+    };
+
+    const filteredContacts = computed(() => {
+      if (!searchQ.value.trim()) return contacts.value;
+      const q = searchQ.value.trim().toLowerCase();
+      return contacts.value.filter(c => c.name.toLowerCase().includes(q) || c.description.toLowerCase().includes(q));
+    });
+
+    const activeGroup = computed(() => filteredContacts.value.filter(c => c.status === 'active'));
+    const inactiveGroup = computed(() => filteredContacts.value.filter(c => c.status !== 'active'));
+
+    // ── 辅助 ────────────────────────────────────────────────────────────────
+    const emoWidth = (val, max) => Math.min(100, Math.round(Math.abs(val) / max * 100));
+    const trustColor = (v) => v >= 20 ? '#44b349' : v <= -20 ? '#e74c3c' : '#aaa';
+
+    const scrollToBottom = () => nextTick(() => {
+      const el = document.getElementById('msg-scroll');
+      if (el) el.scrollTop = el.scrollHeight;
+    });
+
+    // ── 打开聊天 ─────────────────────────────────────────────────────────────
+    const openChat = (npc) => {
+      active.value = npc;
+      npc.unread = false;
+      if (!chatCache[npc.name]) {
+        const saved = loadCache(npc.name);
+        chatCache[npc.name] = saved || [{ role: 'npc', content: greetingFor(npc), typing: false }];
+      }
+      messages.value = chatCache[npc.name];
+      chatSlide.value = true;
+      page.value = 'chat';
+      setTimeout(() => { chatSlide.value = false; }, 300);
+      nextTick(() => { scrollToBottom(); inputEl.value?.focus(); });
+    };
+
+    // 根据情绪生成开场白
+    const greetingFor = (npc) => {
+      const { trust = 0, irritation = 0 } = npc;
+      if (irritation >= 40) return '有事？';
+      if (trust >= 40) return `${npc.name}：找我啥事？`;
+      return '你找我？';
+    };
+
+    const goBack = () => {
+      page.value = 'list';
+      refreshContacts();
+    };
+
+    // ── 发消息 ───────────────────────────────────────────────────────────────
+    const send = async () => {
+      if (!input.value.trim() || waiting.value || !active.value) return;
+      const playerText = input.value.trim();
+      messages.value.push({ role: 'player', content: playerText, typing: false });
+      input.value = '';
+      waiting.value = true;
+      scrollToBottom();
+
+      // 最近 8 条作为上下文
+      const recentCtx = messages.value.slice(-8)
+        .map(m => `${m.role === 'player' ? '玩家' : active.value.name}: ${m.content}`)
+        .join('\n');
+
+      const npcMsg = reactive({ role: 'npc', content: '', typing: true });
+      messages.value.push(npcMsg);
+      scrollToBottom();
+
+      let fullReply = '';
+
+      try {
+        const resp = await fetch(`${API}/api/ai/npc-chat/stream`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            npc_name: active.value.name,
+            player_message: playerText,
+            chat_history: recentCtx,
+          }),
+        });
+
+        const reader = resp.body.getReader();
+        const dec = new TextDecoder();
+        let buf = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += dec.decode(value, { stream: true });
+          const parts = buf.split('\n\n');
+          buf = parts.pop();
+          for (const part of parts) {
+            if (!part.startsWith('data: ')) continue;
+            try {
+              const ev = JSON.parse(part.slice(6));
+              if (ev.type === 'text') { npcMsg.content += ev.content; fullReply += ev.content; scrollToBottom(); }
+              else if (ev.type === 'done') { npcMsg.typing = false; }
+            } catch (_) {}
+          }
+        }
+        npcMsg.typing = false;
+      } catch (err) {
+        console.error('聊天失败', err);
+        npcMsg.content = '【信号丢失】';
+        npcMsg.typing = false;
+      } finally {
+        waiting.value = false;
+        scrollToBottom();
+      }
+
+      // ── 持久化聊天记录到 localStorage ────────────────────────────────────
+      if (active.value) saveCache(active.value.name, messages.value);
+
+      // ── 写回记忆与情绪（异步，不阻塞 UI）──────────────────────────────────
+      if (fullReply && active.value) {
+        commitToMemory(active.value.name, playerText, fullReply);
+      }
+
+      // 更新列表里的最后消息
+      if (active.value) {
+        const c = contacts.value.find(x => x.name === active.value.name);
+        if (c) {
+          c.lastMsg = fullReply.slice(0, 40);
+          c.lastTime = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
+          c.unread = false;
+        }
+      }
+    };
+
+    // ── 写回 agent /commit 端点 ──────────────────────────────────────────────
+    const commitToMemory = async (npcName, playerMsg, npcReply) => {
+      try {
+        const res = await fetch(`${API}/api/ai/npc-chat/commit`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            npc_name: npcName,
+            player_message: playerMsg,
+            npc_reply: npcReply,
+          }),
+        });
+        const data = await res.json();
+        if (data.status === 'ok' && active.value?.name === npcName) {
+          // 更新当前联系人情绪展示
+          active.value.trust = data.emotion.trust;
+          active.value.fear = data.emotion.fear;
+          active.value.irritation = data.emotion.irritation;
+          active.value.emoTag = emoTagFromEmo(data.emotion);
+          const c = contacts.value.find(x => x.name === npcName);
+          if (c) {
+            c.trust = data.emotion.trust;
+            c.fear = data.emotion.fear;
+            c.irritation = data.emotion.irritation;
+            c.emoTag = emoTagFromEmo(data.emotion);
+          }
+        }
+      } catch (e) {
+        console.warn('记忆写回失败（不影响聊天）', e);
+      }
+    };
+
+    // ── URL 参数直跳 ─────────────────────────────────────────────────────────
+    const checkUrlParam = () => {
+      const npcName = new URLSearchParams(window.location.search).get('npc');
+      if (!npcName) return;
+      const tryOpen = () => {
+        const found = contacts.value.find(c => c.name === npcName);
+        if (found) { openChat(found); return; }
+        if (loading.value) { setTimeout(tryOpen, 200); return; }
+        openChat({ id: 99999, name: npcName, status: 'active', description: '',
+          avatarColor: hashColor(npcName), emoTag: '', lastMsg: '', lastTime: '', unread: false,
+          trust: 0, fear: 0, irritation: 0 });
+      };
+      tryOpen();
+    };
+
+    onMounted(() => { refreshContacts().then(checkUrlParam); });
+
+    return {
+      page, chatSlide, loading, contacts, filteredContacts, activeGroup, inactiveGroup,
+      searchQ, active, messages, input, waiting, inputEl, timeLabel, debugInfo,
+      refreshContacts, openChat, goBack, send, emoWidth, trustColor,
+    };
+  }
+}).mount('#app');
+</script>
+</body>
+</html>
