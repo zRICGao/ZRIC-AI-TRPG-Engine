@@ -33,7 +33,7 @@ campaigns/*
 done/
 
 # 战报
-battle_report_*.md
+battle_report/
 
 # 备份 / 草稿文件
 *副本*

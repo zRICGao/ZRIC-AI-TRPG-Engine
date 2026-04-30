@@ -47,12 +47,23 @@
         /* 场景图片：独立展示，保留原图细节 */
         .scene-hero-image {
             width: 100%;
-            max-height: 50vh;
-            object-fit: cover;
+            max-height: 70vh;
+            object-fit: contain;
+            background: #06060d;
             border-radius: 12px;
-            filter: brightness(0.85) contrast(1.05);
+            filter: brightness(0.9) contrast(1.05);
             box-shadow: 0 4px 40px rgba(0,0,0,0.6), 0 0 80px rgba(100,70,200,0.08);
             transition: opacity 0.8s ease;
+        }
+        .scene-prompt-box {
+            margin-top: 10px;
+            padding: 10px 14px;
+            background: rgba(139,92,246,0.12);
+            border: 1px solid rgba(139,92,246,0.3);
+            border-radius: 8px;
+            font-size: 0.78rem;
+            color: #c4b5fd;
+            line-height: 1.7;
         }
 
         /* 文字阅读板块：独立卡片，与图片视觉分离 */
@@ -175,6 +186,9 @@
             <!-- 场景图片（独立展示） -->
             <div v-if="sceneImage" class="fade-in">
                 <img :src="sceneImage" alt="场景插图" class="scene-hero-image" @error="sceneImage=null">
+                <div v-if="sceneAiText" class="scene-prompt-box">
+                    <span style="opacity:.6;margin-right:4px">✦ 深入调查 · </span>{{ sceneAiText }}
+                </div>
             </div>
 
             <!-- 文字阅读板块（独立卡片） -->
@@ -299,6 +313,8 @@ createApp({
         const storyNodes   = ref([]);
         const currentScene = ref(null);
         const sceneImage   = ref(null);
+        const scenePrompt  = ref('');
+        const sceneAiText  = ref('');
         const bgmName      = ref('');
         const bgmUrl       = ref('');
         const bgmPlaying   = ref(false);
@@ -334,21 +350,24 @@ createApp({
                         lastSceneId = sceneId;
                         currentScene.value = data.current_scene;
                         sceneImage.value = data.scene_image || null;
+                        scenePrompt.value = data.scene_prompt || '';
                     }
                 } else {
                     // REST 兜底：从 storyNodes 查找
                     const found = storyNodes.value.find(n => n.id === sceneId);
                     if (found) {
-                        const contentChanged = !currentScene.value || 
+                        const contentChanged = !currentScene.value ||
                                                currentScene.value.content !== found.content;
-                        
+
                         if (lastSceneId !== sceneId || contentChanged) {
                             lastSceneId = sceneId;
                             currentScene.value = found;
                             sceneImage.value = data.scene_image || null;
+                            scenePrompt.value = data.scene_prompt || '';
                         }
                     }
                 }
+                sceneAiText.value = data.scene_ai_text || '';
             } else {
                 currentScene.value = null;
                 lastSceneId = null;
@@ -473,7 +492,7 @@ createApp({
 
         return {
             API_BASE_URL, connected, wsConnected, connectAttempts,
-            currentScene, sceneImage,
+            currentScene, sceneImage, scenePrompt, sceneAiText,
             pcChars, npcChars, bgmName, bgmPlaying, audioRef
         };
     }

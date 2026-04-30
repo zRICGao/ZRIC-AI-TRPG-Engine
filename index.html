@@ -750,10 +750,15 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:14px; h
                         <div style="background:#0b0e17;border:1px solid rgba(255,255,255,.06);border-radius:8px;padding:18px 20px">
                             <div class="tag" style="display:flex;align-items:center;gap:6px;margin-bottom:12px">
                                 <i class="ph ph-image"></i> 场景图像生成 (展示给玩家)
+                                <select v-model="imgModel" class="inp" style="margin-left:auto;width:190px;font-size:12px;padding:3px 8px">
+                                    <option value="free">免费模型（测试）</option>
+                                    <option value="doubao">Doubao-Seedream-5.0-lite（收费）</option>
+                                </select>
                             </div>
                             <div style="display:flex;gap:10px;margin-bottom:14px">
                                 <input v-model="imgPrompt" type="text" placeholder="留空则自动提取场景内容…" class="inp" style="flex:1">
                                 <select v-model="imgStyle" class="inp" style="width:110px">
+                                    <option value="none">默认</option>
                                     <option value="fantasy">奇幻</option>
                                     <option value="horror">恐怖</option>
                                     <option value="realistic">写实</option>
@@ -773,12 +778,14 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:14px; h
                                 <i class="ph ph-warning-circle" style="font-size:20px"></i> 图像生成失败，请重试
                             </div>
                             <div v-if="generatedImageUrl&&!isLoadingImg&&!imgLoadError" class="img-wrap" style="position:relative;border-radius:6px;overflow:hidden;border:1px solid rgba(255,255,255,.08)">
-                                <img :src="generatedImageUrl" alt="场景图" style="width:100%;height:240px;object-fit:cover;display:block">
+                                <img :src="generatedImageUrl" alt="场景图" style="width:100%;max-height:360px;object-fit:contain;display:block;background:#0a0a0f">
                                 <div class="img-overlay">
-                                    <span v-if="imgEnPrompt" style="font-size:11px;color:#9ca3af;font-family:'JetBrains Mono';flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ imgEnPrompt }}</span>
                                     <a :href="generatedImageUrl" target="_blank" class="btn btn-ghost btn-sm" style="flex-shrink:0"><i class="ph ph-arrow-square-out"></i> 大图</a>
-                                    <button @click="generatedImageUrl='';imgLoadError=false" class="btn btn-danger btn-sm" style="flex-shrink:0"><i class="ph ph-trash"></i> 移除</button>
+                                    <button @click="generatedImageUrl='';imgPromptUsed='';imgLoadError=false" class="btn btn-danger btn-sm" style="flex-shrink:0"><i class="ph ph-trash"></i> 移除</button>
                                 </div>
+                            </div>
+                            <div v-if="imgPromptUsed&&generatedImageUrl&&!isLoadingImg" style="margin-top:8px;padding:8px 12px;background:rgba(139,92,246,0.12);border:1px solid rgba(139,92,246,0.3);border-radius:6px;font-size:11px;color:#c4b5fd;line-height:1.6">
+                                <i class="ph ph-sparkle" style="margin-right:4px"></i><span style="opacity:.7">AI 扩写 Prompt：</span>{{ imgPromptUsed }}
                             </div>
                         </div>
                     </template>
@@ -2823,11 +2830,13 @@ createApp({
             '说话时眼神飘忽不定',
         ];
         const imgPrompt = ref('');
-        const imgStyle = ref('fantasy');
+        const imgStyle = ref('none');
+        const imgModel = ref('free');
         const isGeneratingImage = ref(false);
         const isLoadingImg = ref(false);
         const generatedImageUrl = ref('');
         const imgEnPrompt = ref('');
+        const imgPromptUsed = ref('');
         const imgLoadError = ref(false);
         const audioRef = ref(null);
         const isPlaying = ref(false);
@@ -3633,7 +3642,7 @@ createApp({
                     }
                 }).catch(()=>{});
             }
-            fetch(`${API_BASE_URL}/api/player/state`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({current_scene_id:next.id,scene_image:generatedImageUrl.value||'',bgm_url:currentTrackUrl.value||'',bgm_name:(tracks.value.find(t=>t.id===currentTrackId.value)||{}).name||''})}).catch(()=>{});
+            fetch(`${API_BASE_URL}/api/player/state`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({current_scene_id:next.id,scene_image:generatedImageUrl.value||'',scene_prompt:imgPromptUsed.value||'',scene_ai_text:'',bgm_url:currentTrackUrl.value||'',bgm_name:(tracks.value.find(t=>t.id===currentTrackId.value)||{}).name||''})}).catch(()=>{});
         };
 
         // ── Worldview / Memory / Lorebook ──
@@ -3808,7 +3817,7 @@ createApp({
         const generateNPC=async()=>{if(!currentNode.value)return;isGeneratingNPC.value=true;try{const r=await fetch(`${API_BASE_URL}/api/ai/generate-npc`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scene_name:currentNode.value.name,scene_content:currentNode.value.content,player_action:playerAction.value||'Explore'})});const d=await r.json();if(d.status==='success'){await fetchGameState();showNpcToast(d.npc);}}catch(e){}finally{isGeneratingNPC.value=false;}};
 
         // ── AI ──
-        const generateAIText=async()=>{if(!currentNode.value)return;isGeneratingText.value=true;try{const r=await fetch(`${API_BASE_URL}/api/ai/expand-text`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scene_name:currentNode.value.name||'',content:currentNode.value.content||''})});const data=await r.json();aiGeneratedText.value=data.generated_text;}catch(e){}finally{isGeneratingText.value=false;}};
+        const generateAIText=async()=>{if(!currentNode.value)return;isGeneratingText.value=true;try{const r=await fetch(`${API_BASE_URL}/api/ai/expand-text`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scene_name:currentNode.value.name||'',content:currentNode.value.content||''})});const data=await r.json();aiGeneratedText.value=data.generated_text;if(currentNode.value&&data.generated_text){fetch(`${API_BASE_URL}/api/player/state`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({current_scene_id:currentNode.value.id,scene_image:generatedImageUrl.value||'',scene_prompt:imgPromptUsed.value||'',scene_ai_text:data.generated_text||'',bgm_url:currentTrackUrl.value||'',bgm_name:(tracks.value.find(t=>t.id===currentTrackId.value)||{}).name||''})}).catch(()=>{});}}catch(e){}finally{isGeneratingText.value=false;}};
         const generateDynamicOptions=async(correctionText='')=>{
             if(!currentNode.value||((!playerAction.value)&&!correctionText&&!lastDynamicContext.value))return;
             isGeneratingOptions.value=true;
@@ -3878,16 +3887,17 @@ createApp({
             isLoadingImg.value = true; 
             imgLoadError.value = false; 
             generatedImageUrl.value = '';
-            const desc = imgPrompt.value.trim() || currentNode.value.name + ' ' + currentNode.value.content.slice(0, 60);
+            const desc = imgPrompt.value.trim() || currentNode.value.name + ' ' + (currentNode.value.expanded_content || currentNode.value.content).slice(0, 100);
             try {
                 const r = await fetch(`${API_BASE_URL}/api/ai/generate-image`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ description: desc, style: imgStyle.value })
+                    body: JSON.stringify({ description: desc, style: imgStyle.value, image_model: imgModel.value })
                 });
                 const d = await r.json();
                 if (d.status === 'success') {
-                    imgEnPrompt.value = d.en_prompt;
+                    imgEnPrompt.value = d.en_prompt || '';
+                    imgPromptUsed.value = d.prompt_used || '';
                     const preload = new window.Image();
                     preload.onload = () => {
                         generatedImageUrl.value = d.image_url; 
@@ -3899,6 +3909,7 @@ createApp({
                                 body: JSON.stringify({
                                     current_scene_id: currentNode.value.id,
                                     scene_image: d.image_url,
+                                    scene_prompt: d.prompt_used || '',
                                     bgm_url: currentTrackUrl.value || '',
                                     bgm_name: (tracks.value.find(t => t.id === currentTrackId.value) || {}).name || ''
                                 })
@@ -4497,7 +4508,7 @@ createApp({
             appState, isLoading, dbConnected, campaignFiles, selectedCampaign,
             // AI 模型
             aiModels, activeAiModel, fetchAiModels, switchAiModel,
-            storyNodes, characters, currentNode, isEditMode, hpLabel, sanLabel, editData, newOptionText, newOptionTarget, showWorldviewModal, worldviewContent, showMemoryModal, memoryContent, showLorebookModal, lorebook, currentLore, aiGeneratedText, playerAction, actionType, isGeneratingText, isGeneratingOptions, ttsPlaying, ttsVoice, ttsTone, ttsRate, ttsSpeak, imgPrompt, imgStyle, isGeneratingImage, isLoadingImg, generatedImageUrl, imgEnPrompt, imgLoadError, audioRef, tracks, currentTrackId, currentTrackUrl, customTrackUrl, isPlaying, volume, narrativeMood, timeSkipInput, forceNarrativeThrust, optionLikelihoods, fateSpinning, fateHighlightIdx, showTriggerModal, triggers, currentTrigger, condTypes, showCharModal, isGeneratingNPC, isExpandingBranch, expandingBranchText, newChar, npcToast, triggerAlert, statChangesLog, showStatChanges, showBattleReportModal, battleReport, isGeneratingReport, battleReportFilename, leftTab, treeContainerRef, treeLayout,
+            storyNodes, characters, currentNode, isEditMode, hpLabel, sanLabel, editData, newOptionText, newOptionTarget, showWorldviewModal, worldviewContent, showMemoryModal, memoryContent, showLorebookModal, lorebook, currentLore, aiGeneratedText, playerAction, actionType, isGeneratingText, isGeneratingOptions, ttsPlaying, ttsVoice, ttsTone, ttsRate, ttsSpeak, imgPrompt, imgStyle, imgModel, isGeneratingImage, isLoadingImg, generatedImageUrl, imgEnPrompt, imgPromptUsed, imgLoadError, audioRef, tracks, currentTrackId, currentTrackUrl, customTrackUrl, isPlaying, volume, narrativeMood, timeSkipInput, forceNarrativeThrust, optionLikelihoods, fateSpinning, fateHighlightIdx, showTriggerModal, triggers, currentTrigger, condTypes, showCharModal, isGeneratingNPC, isExpandingBranch, expandingBranchText, newChar, npcToast, triggerAlert, statChangesLog, showStatChanges, showBattleReportModal, battleReport, isGeneratingReport, battleReportFilename, leftTab, treeContainerRef, treeLayout,
             // 时间线系统
             timelinePanelOpen, timelines, showTlEditModal, tlEditData, tlColorPresets,
             showTlMemoryModal, tlMemoryTarget, tlMemoryContent,

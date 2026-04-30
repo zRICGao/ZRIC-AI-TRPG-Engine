@@ -146,6 +146,7 @@ except ImportError:
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 SILICONFLOW_API_KEY = os.environ.get("SILICONFLOW_API_KEY", "")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+DOUBAO_API_KEY = os.environ.get("DOUBAO_API_KEY", "")
 
 if not DEEPSEEK_API_KEY:
     print("⚠️  警告：未检测到 DEEPSEEK_API_KEY 环境变量！AI 功能将不可用。", flush=True)
@@ -346,6 +347,8 @@ def init_db():
     # 投屏端同步状态
     cursor.execute("INSERT OR IGNORE INTO system_state (key, value) VALUES ('player_current_scene_id', '')")
     cursor.execute("INSERT OR IGNORE INTO system_state (key, value) VALUES ('player_scene_image', '')")
+    cursor.execute("INSERT OR IGNORE INTO system_state (key, value) VALUES ('player_scene_prompt', '')")
+    cursor.execute("INSERT OR IGNORE INTO system_state (key, value) VALUES ('player_scene_ai_text', '')")
     cursor.execute("INSERT OR IGNORE INTO system_state (key, value) VALUES ('player_bgm_url', '')")
     cursor.execute("INSERT OR IGNORE INTO system_state (key, value) VALUES ('player_bgm_name', '')")
 
@@ -420,6 +423,7 @@ class ImageGenRequest(BaseModel):
     scene_id: int | None = None # 当前场景 ID（传入后自动提取场景名+描述+地图位置）
     scene_name: str = ""        # 场景名（scene_id 未传时的手动兜底）
     scene_content: str = ""     # 场景正文（scene_id 未传时的手动兜底）
+    image_model: str = "free"   # 模型选择：free（Kolors 免费）或 doubao（豆包收费）
 
 # 【多时间线推演】：数据模型（CRUD 模型已迁移至 timeline.py）
 class TimelineDynamicRequest(BaseModel):
@@ -542,6 +546,8 @@ def load_campaign(req: LoadCampaignRequest):
         cursor.execute("INSERT INTO system_state (key, value) VALUES ('session_memory', ?)",  (session_memory,))
         cursor.execute("INSERT OR IGNORE INTO system_state (key, value) VALUES ('player_current_scene_id', '')")
         cursor.execute("INSERT OR IGNORE INTO system_state (key, value) VALUES ('player_scene_image', '')")
+        cursor.execute("INSERT OR IGNORE INTO system_state (key, value) VALUES ('player_scene_prompt', '')")
+        cursor.execute("INSERT OR IGNORE INTO system_state (key, value) VALUES ('player_scene_ai_text', '')")
         cursor.execute("INSERT OR IGNORE INTO system_state (key, value) VALUES ('player_bgm_url', '')")
         cursor.execute("INSERT OR IGNORE INTO system_state (key, value) VALUES ('player_bgm_name', '')")
 
@@ -1382,6 +1388,7 @@ def generate_image(request: ImageGenRequest):
         "realistic": "照片级写实，电影画面",
         "anime":     "日系动漫风格，吉卜力风",
         "sketch":    "铅笔素描风格，黑白线稿",
+        "none":      "",
     }
     style_anchor = style_map.get(request.style, style_map["fantasy"])
 
@@ -1414,84 +1421,133 @@ def generate_image(request: ImageGenRequest):
         except Exception as e:
             _log.debug("生图场景上下文提取失败: %s", e)
 
-    # ── Step 2：DeepSeek 压缩为精炼的中文画面描述 ──
-    context_parts = []
-    if scene_name:
-        context_parts.append(f"场景名：{scene_name}")
-    if scene_content:
-        context_parts.append(f"场景描述：{scene_content[:300]}")
-    if worldview_snippet:
-        context_parts.append(f"世界观：{worldview_snippet}")
-    if map_location:
-        context_parts.append(f"地点：{map_location}")
-    if request.description:
-        context_parts.append(f"GM 补充指导：{request.description}")
+    use_doubao = (request.image_model == "doubao")
 
-    if not context_parts:
-        # 什么上下文都没有，用 description 兜底
-        context_parts.append(request.description or "一个神秘的奇幻场景")
+    if use_doubao:
+        # ── 豆包分支：完整场景上下文直接拼接，跳过 DeepSeek 扩写 ──
+        parts = []
+        if scene_name:
+            parts.append(scene_name)
+        if scene_content:
+            parts.append(scene_content.replace('\n', '，'))
+        if worldview_snippet:
+            parts.append(worldview_snippet)
+        if map_location:
+            parts.append(map_location)
+        if request.description:
+            parts.append(request.description)
+        if not parts:
+            parts.append("神秘场景")
+        suffix = f"，{style_anchor}" if style_anchor else ""
+        full_prompt = "，".join(parts) + suffix + "，电影级光影，高质量"
+    else:
+        # ── Kolors 分支：DeepSeek 扩写为细节丰富的画面描述 ──
+        context_parts = []
+        if scene_name:
+            context_parts.append(f"场景名：{scene_name}")
+        if scene_content:
+            context_parts.append(f"场景描述：{scene_content[:300]}")
+        if worldview_snippet:
+            context_parts.append(f"世界观：{worldview_snippet}")
+        if map_location:
+            context_parts.append(f"地点：{map_location}")
+        if request.description:
+            context_parts.append(f"GM 补充指导：{request.description}")
+        if not context_parts:
+            context_parts.append(request.description or "一个神秘的奇幻场景")
 
-    context_text = "\n".join(context_parts)
+        context_text = "\n".join(context_parts)
 
-    try:
-        resp = client.chat.completions.create(
-            model="deepseek-chat",
-            messages=[
-                {"role": "system", "content": (
-                    "你是一个专业的 AI 视觉提示词工程师。当前对接的图像生成模型（Kolors）拥有极强的中文原生理解能力。\n"
-                    "请将接收到的跑团场景描述，扩写为一段高质量、细节丰富的中文画面描述，字数控制在 150-200 字以内。\n"
-                    "【扩写强制规则】：\n"
-                    "1. 视觉具象化：将抽象的剧情转化为具体的画面要素，细化人物的衣着材质、神态、肢体动作"
-                    "（例如：身穿暗红色金丝边长袍，眉头紧锁，右手握着发光的法杖）。\n"
-                    "2. 环境与空间：补充明确的空间关系、背景陈设和光影氛围"
-                    "（例如：阳光透过彩色玻璃窗洒在斑驳的石板地上，空气中漂浮着微尘，呈现丁达尔效应）。\n"
-                    "3. 画质控制锚点：必须在段落末尾追加提升画质的中文限定词汇"
-                    "（例如：杰作，最高画质，电影级光影，8k分辨率，极致细节，CG级渲染，景深）。\n"
-                    "【禁止事项】：\n"
-                    "- 不要出现对话、引号内的文字（模型会尝试渲染文字到画面上）\n"
-                    "- 不要出现「这是」「画面中」等元描述，不要任何前缀或解释\n"
-                    "请直接输出扩写后的中文段落。"
-                )},
-                {"role": "user", "content": context_text}
-            ],
-            temperature=0.7,
-            max_tokens=350,
-        )
-        scene_prompt = resp.choices[0].message.content.strip().strip('"').replace('\n', '，')
-    except Exception as e:
-        _log.warning("生图 prompt 生成失败，使用场景名兜底: %s", e)
-        scene_prompt = scene_name or request.description or "神秘的奇幻场景，戏剧性光影"
+        try:
+            resp = client.chat.completions.create(
+                model="deepseek-chat",
+                messages=[
+                    {"role": "system", "content": (
+                        "你是一个专业的 AI 视觉提示词工程师。\n"
+                        "请将接收到的跑团场景描述，扩写为一段高质量、细节丰富的中文画面描述，字数控制在 150-200 字以内。\n"
+                        "【扩写强制规则】：\n"
+                        "1. 视觉具象化：将抽象的剧情转化为具体的画面要素，细化人物的衣着材质、神态、肢体动作"
+                        "2. 环境与空间：补充明确的空间关系、背景陈设和光影氛围"
+                        "3. 画质控制锚点：必须在段落末尾追加提升画质的中文限定词汇"
+                        "（例如：杰作，最高画质，电影级光影，8k分辨率，极致细节，CG级渲染，景深）。\n"
+                        "【禁止事项】：\n"
+                        "- 不要出现对话、引号内的文字（模型会尝试渲染文字到画面上）\n"
+                        "- 不要出现「这是」「画面中」等元描述，不要任何前缀或解释\n"
+                        "请直接输出扩写后的中文段落。"
+                    )},
+                    {"role": "user", "content": context_text}
+                ],
+                temperature=0.7,
+                max_tokens=350,
+            )
+            scene_prompt = resp.choices[0].message.content.strip().strip('"').replace('\n', '，')
+        except Exception as e:
+            _log.warning("生图 prompt 生成失败，使用场景名兜底: %s", e)
+            scene_prompt = scene_name or request.description or "神秘的奇幻场景，戏剧性光影"
 
-    # ── Step 3：拼接最终 prompt（中文场景描述 + 风格锚点）发给 Kolors ──
-    full_prompt = f"{scene_prompt}，{style_anchor}"
+        full_prompt = f"{scene_prompt}，{style_anchor}" if style_anchor else scene_prompt
 
     import httpx
 
-    headers = {
-        "Authorization": f"Bearer {SILICONFLOW_API_KEY}",
-        "Content-Type":  "application/json",
-    }
-    payload = {
-        "model":           "Kwai-Kolors/Kolors",
-        "prompt":          full_prompt,
-        "negative_prompt": "模糊，低质量，水印，文字，变形，多余肢体，丑陋，噪点",
-        "image_size":      "1024x576",   # 16:9 横版，适合场景展示
-        "num_inference_steps": 25,
-        "guidance_scale":  7.5,
-        "seed":            random.randint(1, 2147483647),
-    }
+    if use_doubao:
+        # ── 豆包 Doubao-Seedream-5.0-lite（收费，使用 OpenAI 兼容客户端） ──
+        if not DOUBAO_API_KEY:
+            return {
+                "status":  "error",
+                "message": "未配置 DOUBAO_API_KEY，请在 .env 中填写豆包 API Key",
+                "image_url": "",
+                "prompt_used": full_prompt,
+            }
+        try:
+            from openai import OpenAI as _OpenAI
+            _doubao_client = _OpenAI(
+                base_url="https://ark.cn-beijing.volces.com/api/v3",
+                api_key=DOUBAO_API_KEY,
+            )
+            resp = _doubao_client.images.generate(
+                model="doubao-seedream-5-0-260128",
+                prompt=full_prompt,
+                size="2K",
+                response_format="url",
+                extra_body={"watermark": False},
+            )
+            image_url = resp.data[0].url
+            return {
+                "status":    "success",
+                "image_url": image_url,
+                "prompt_used": full_prompt,
+            }
+        except Exception as e:
+            return {
+                "status":  "error",
+                "message": f"豆包 API 错误：{e}",
+                "image_url": "",
+                "prompt_used": full_prompt,
+            }
+    else:
+        # ── 硅基流动 Kolors（免费测试） ──
+        api_url = "https://api.siliconflow.cn/v1/images/generations"
+        headers = {
+            "Authorization": f"Bearer {SILICONFLOW_API_KEY}",
+            "Content-Type":  "application/json",
+        }
+        payload = {
+            "model":           "Kwai-Kolors/Kolors",
+            "prompt":          full_prompt,
+            "negative_prompt": "模糊，低质量，水印，文字，变形，多余肢体，丑陋，噪点",
+            "image_size":      "1024x576",
+            "num_inference_steps": 25,
+            "guidance_scale":  7.5,
+            "seed":            random.randint(1, 2147483647),
+        }
 
     try:
-        with httpx.Client(timeout=60.0) as http:
-            r = http.post(
-                "https://api.siliconflow.cn/v1/images/generations",
-                headers=headers,
-                json=payload,
-            )
+        with httpx.Client(timeout=90.0) as http:
+            r = http.post(api_url, headers=headers, json=payload)
         r.raise_for_status()
         data = r.json()
 
-        img_item = data["images"][0]
+        img_item = data["images"][0] if "images" in data else data["data"][0]
 
         if "url" in img_item and img_item["url"]:
             image_url = img_item["url"]
@@ -1504,13 +1560,14 @@ def generate_image(request: ImageGenRequest):
         return {
             "status":    "success",
             "image_url": image_url,
-            "prompt_used": full_prompt,  # 返回实际使用的 prompt（供 GM 查看/微调）
+            "prompt_used": full_prompt,
         }
 
     except httpx.HTTPStatusError as e:
+        provider = "豆包" if use_doubao else "硅基流动"
         return {
             "status":  "error",
-            "message": f"硅基流动 API 错误 {e.response.status_code}：{e.response.text[:200]}",
+            "message": f"{provider} API 错误 {e.response.status_code}：{e.response.text[:200]}",
             "image_url": "",
             "prompt_used": full_prompt,
         }
@@ -1759,7 +1816,9 @@ def _build_player_state_snapshot() -> dict:
         "type": "state_update",
         "current_scene_id": scene_id,
         "current_scene": current_scene,
-        "scene_image": _get("player_scene_image") if scene_id else "",
+        "scene_image":   _get("player_scene_image") if scene_id else "",
+        "scene_prompt":  _get("player_scene_prompt") if scene_id else "",
+        "scene_ai_text": _get("player_scene_ai_text") if scene_id else "",
         "bgm_url": _get("player_bgm_url") if scene_id else "",
         "bgm_name": _get("player_bgm_name") if scene_id else "",
         "characters": characters,
@@ -1804,6 +1863,8 @@ def log_scene_visit(req: SceneVisitRequest):
 class PlayerStateRequest(BaseModel):
     current_scene_id: int = 0
     scene_image:      str = ""
+    scene_prompt:     str = ""
+    scene_ai_text:    str = ""
     bgm_url:          str = ""
     bgm_name:         str = ""
 
@@ -1818,6 +1879,8 @@ def get_player_state():
         result = {
             "current_scene_id": int(scene_id_raw) if scene_id_raw and scene_id_raw.isdigit() else None,
             "scene_image":      _get("player_scene_image"),
+            "scene_prompt":     _get("player_scene_prompt"),
+            "scene_ai_text":    _get("player_scene_ai_text"),
             "bgm_url":          _get("player_bgm_url"),
             "bgm_name":         _get("player_bgm_name"),
         }
@@ -1829,6 +1892,8 @@ async def push_player_state(req: PlayerStateRequest):
     with safe_db() as conn:
         conn.execute("INSERT OR REPLACE INTO system_state (key,value) VALUES ('player_current_scene_id',?)", (str(req.current_scene_id),))
         conn.execute("INSERT OR REPLACE INTO system_state (key,value) VALUES ('player_scene_image',?)",      (req.scene_image,))
+        conn.execute("INSERT OR REPLACE INTO system_state (key,value) VALUES ('player_scene_prompt',?)",     (req.scene_prompt,))
+        conn.execute("INSERT OR REPLACE INTO system_state (key,value) VALUES ('player_scene_ai_text',?)",    (req.scene_ai_text,))
         conn.execute("INSERT OR REPLACE INTO system_state (key,value) VALUES ('player_bgm_url',?)",          (req.bgm_url,))
         conn.execute("INSERT OR REPLACE INTO system_state (key,value) VALUES ('player_bgm_name',?)",         (req.bgm_name,))
         conn.commit()

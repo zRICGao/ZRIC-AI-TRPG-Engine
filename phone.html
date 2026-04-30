@@ -430,6 +430,14 @@ createApp({
           if (a.status !== 'active' && b.status === 'active') return 1;
           return (b.lastTime || '').localeCompare(a.lastTime || '');
         });
+
+        // 用 localStorage 缓存叠加 lastMsg，避免 commitToMemory 还未完成时被覆盖为空
+        contacts.value.forEach(c => {
+          const saved = loadCache(c.name);
+          if (!saved || !saved.length) return;
+          const lastNpc = [...saved].reverse().find(m => m.role === 'npc' && m.content);
+          if (lastNpc) c.lastMsg = lastNpc.content.slice(0, 40);
+        });
       } catch (e) {
         console.error('加载联系人失败', e);
         debugInfo.value = `错误: ${e.message}`;
