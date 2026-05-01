@@ -95,7 +95,7 @@ _refresh_vector_cache = None    # rag.refresh_vector_cache
 
 # 当前激活的模型（服务器级默认值，可被请求级参数覆盖）
 AVAILABLE_MODELS = {
-    "deepseek":     {"label": "DeepSeek V4 Flash", "model_id": "deepseek-v4-flash"},
+    "deepseek":     {"label": "DeepSeek Chat",    "model_id": "deepseek-chat"},
     "deepseek-pro": {"label": "DeepSeek V4 Pro",   "model_id": "deepseek-v4-pro"},
     "claude-opus":  {"label": "Claude Opus 4.6",   "model_id": "claude-opus-4-6"},
 }
@@ -249,7 +249,7 @@ def _call_ai(system_prompt: str, user_prompt: str,
 def _call_deepseek(system_prompt: str, user_prompt: str,
                    temperature: float, max_tokens: int,
                    json_mode: bool = True,
-                   model_id: str = "deepseek-v4-flash") -> str:
+                   model_id: str = "deepseek-chat") -> str:
     """调用 DeepSeek API。"""
     if not _deepseek_client:
         raise RuntimeError("DeepSeek client 未初始化。请检查 API Key 配置和 configure_agent 是否已执行。")

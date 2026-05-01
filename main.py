@@ -587,17 +587,27 @@ def load_campaign(req: LoadCampaignRequest):
         for t in config.get("triggers", []):
             # 兼容旧存档：可能只有 cond_type/cond_value，没有 conditions
             conditions_raw = t.get("conditions", [])
-            # conditions 可能是 None 或非列表
-            if not isinstance(conditions_raw, list):
+            # 导出时 conditions 列是 DB TEXT 字段，写入 JSON 后变成字符串 —— 需先反序列化
+            if isinstance(conditions_raw, str):
+                try:
+                    conditions_raw = json.loads(conditions_raw)
+                except (json.JSONDecodeError, TypeError):
+                    conditions_raw = []
+            if not conditions_raw:
                 conditions_raw = []
             if not conditions_raw and t.get("cond_type") and t.get("cond_value"):
                 conditions_raw = [{"type": t["cond_type"], "value": t["cond_value"]}]
             cond_type = t.get("cond_type", "")
             cond_value = t.get("cond_value", "")
-            # 旧存档 cond_type 可能是 None
-            if not cond_type and conditions_raw:
-                cond_type = conditions_raw[0].get("type", "")
-                cond_value = conditions_raw[0].get("value", "")
+            # 旧存档 cond_type 可能是 None；兼容 list 和 dict（树）两种格式
+            if not cond_type:
+                if isinstance(conditions_raw, list) and conditions_raw:
+                    cond_type = conditions_raw[0].get("type", "")
+                    cond_value = conditions_raw[0].get("value", "")
+                elif isinstance(conditions_raw, dict):
+                    first = (conditions_raw.get("children") or [{}])[0]
+                    cond_type = first.get("type", "")
+                    cond_value = first.get("value", "")
             cursor.execute(
                 "INSERT INTO triggers (label, target_node_id, mode, cond_type, cond_value, conditions, fired) "
                 "VALUES (?,?,?,?,?,?,0)",

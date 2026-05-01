@@ -3591,6 +3591,7 @@ createApp({
             let tree = toNode(valid[0]);
             for (let i = 1; i < valid.length; i++)
                 tree = { op: valid[i].joinOp || 'and', children: [tree, toNode(valid[i])] };
+            if (!tree.op) tree = { op: 'and', children: [tree] };
             return tree;
         };
         const fetchTriggers = async () => {
