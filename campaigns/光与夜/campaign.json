@@ -1,0 +1,39 @@
+{
+    "worldview": "【世界观名称】\n\n在此填写你的世界观设定。包括：时代背景、核心规则、魔法/科技体系、社会结构等。\n\n【核心基调】\n描述故事的整体氛围：恐怖、冒险、日常、悬疑……\n\n【情绪轴】\nHP 代表「」：\nSAN 代表「」：\n\n【AI 推演约束】\n1. \n2. \n3. ",
+
+    "session_memory": "【跑团记忆日志已初始化】\n",
+
+    "characters": [
+        {
+            "name": "主角名",
+            "role": "PC",
+            "hp": 100,
+            "san": 100,
+            "inventory": "",
+            "status": "active"
+        }
+    ],
+
+    "nodes": [
+        {
+            "id": 1,
+            "name": "开场",
+            "summary": "故事的起点",
+            "content": "在此填写开场场景描写。"
+        }
+    ],
+
+    "options": [],
+
+    "lorebook": [],
+
+    "triggers": [],
+
+    "world_entities": [],
+
+    "timelines": [],
+
+    "map_rooms": [],
+
+    "map_edges": []
+}
