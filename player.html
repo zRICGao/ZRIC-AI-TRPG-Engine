@@ -9,292 +9,547 @@
     <style>
         @import url('https://fonts.googleapis.com/css2?family=ZCOOL+XiaoWei&display=swap');
 
-        * { box-sizing: border-box; margin: 0; padding: 0; }
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-        body {
-            background: #0a0a0f;
-            color: #e8e0d0;
+        html, body {
+            width: 100%; height: 100%;
+            overflow: hidden;
+            background: #040210;
             font-family: 'ZCOOL XiaoWei', 'STKaiti', 'SimSun', serif;
-            min-height: 100vh;
-            overflow-x: hidden;
+            color: #e8e0d0;
         }
 
-        /* 星空背景 */
-        body::before {
-            content: '';
-            position: fixed;
-            inset: 0;
-            background:
-                radial-gradient(ellipse at 20% 50%, rgba(30,20,60,0.6) 0%, transparent 60%),
-                radial-gradient(ellipse at 80% 20%, rgba(10,30,50,0.5) 0%, transparent 50%),
-                radial-gradient(ellipse at 60% 80%, rgba(40,10,30,0.4) 0%, transparent 50%);
+        #app { position: fixed; inset: 0; }
+
+        /* ══════════════ 图片层 ══════════════ */
+
+        /* 模糊氛围底层：铺满全屏，大幅暗化模糊，填充主图侧边与下方空隙 */
+        .scene-bg-blur {
+            position: absolute; inset: 0; z-index: 0;
+            width: 100%; height: 100%;
+            object-fit: cover;
+            object-position: center 30%;
+            filter: blur(48px) brightness(0.26) saturate(0.55);
+            transform: scale(1.07);   /* 消除 blur 边缘白边 */
+        }
+
+        /* 主图：上方区域 contain 完整展示，水平居中顶部对齐 */
+        .scene-bg-img {
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            z-index: 1;
+            width: 100%;
+            height: 80vh;
+            object-fit: contain;
+            object-position: center top;
+            transition: opacity 1.4s ease;
+        }
+
+        /* 侧边渐变模糊面板：左右各一，替代黑框 */
+        .scene-side-panel {
+            position: absolute;
+            top: 0; height: 80vh;
+            z-index: 2;
+            width: 22%;
+            overflow: hidden;
             pointer-events: none;
-            z-index: 0;
+        }
+        .scene-side-panel-left  { left: 0; }
+        .scene-side-panel-right { right: 0; }
+
+        .scene-side-panel img {
+            width: 100%; height: 100%;
+            object-fit: cover;
+            filter: blur(18px) brightness(0.62) saturate(0.72);
+            transform: scale(1.06);
+        }
+        .scene-side-panel-left {
+            mask-image: linear-gradient(to right, black 25%, transparent 100%);
+            -webkit-mask-image: linear-gradient(to right, black 25%, transparent 100%);
+        }
+        .scene-side-panel-right {
+            mask-image: linear-gradient(to left, black 25%, transparent 100%);
+            -webkit-mask-image: linear-gradient(to left, black 25%, transparent 100%);
+        }
+        .scene-side-panel-left  img { object-position: left top;  }
+        .scene-side-panel-right img { object-position: right top; }
+
+        .scene-bg-default {
+            position: absolute; inset: 0; z-index: 0;
+            background:
+                radial-gradient(ellipse 80% 70% at 30% 40%, rgba(55,18,105,0.75) 0%, transparent 60%),
+                radial-gradient(ellipse 60% 55% at 78% 60%, rgba(8,28,75,0.65) 0%, transparent 55%),
+                radial-gradient(ellipse 55% 45% at 58% 95%, rgba(75,12,42,0.55) 0%, transparent 50%),
+                linear-gradient(170deg, #060218 0%, #02010c 45%, #07030f 100%);
         }
 
-        #app { position: relative; z-index: 1; }
+        /* 底部加深遮罩：在图片底边（≈60vh）前提前淡出，使主图与暗区自然融合 */
+        .screen-vignette {
+            position: absolute; inset: 0; z-index: 2;
+            background: linear-gradient(
+                to bottom,
+                rgba(0,0,0,0.18) 0%,
+                rgba(0,0,0,0.03) 16%,
+                rgba(0,0,0,0.06) 34%,
+                rgba(0,0,0,0.42) 52%,
+                rgba(0,0,0,0.80) 64%,
+                rgba(0,0,0,0.97) 100%
+            );
+            pointer-events: none;
+        }
 
-        /* 左侧场景主区域 */
-        .scene-main {
-            position: relative;
-            flex: 1;
+        /* ══════════════ 主角状态 HUD ══════════════ */
+        .pc-hud {
+            position: absolute;
+            top: 2.5rem; left: 2.5rem;
+            z-index: 20;
             display: flex;
             flex-direction: column;
-            padding: 2rem 2.5rem;
-            gap: 1.5rem;
+            gap: 0.65rem;
         }
 
-        /* 场景图片：独立展示，保留原图细节 */
-        .scene-hero-image {
-            width: 100%;
-            max-height: 70vh;
-            object-fit: contain;
-            background: #06060d;
-            border-radius: 12px;
-            filter: brightness(0.9) contrast(1.05);
-            box-shadow: 0 4px 40px rgba(0,0,0,0.6), 0 0 80px rgba(100,70,200,0.08);
-            transition: opacity 0.8s ease;
-        }
-        .scene-prompt-box {
-            margin-top: 10px;
-            padding: 10px 14px;
-            background: rgba(139,92,246,0.12);
-            border: 1px solid rgba(139,92,246,0.3);
-            border-radius: 8px;
-            font-size: 0.78rem;
-            color: #c4b5fd;
-            line-height: 1.7;
+        .pc-card {
+            position: relative;
+            background: transparent;
+            backdrop-filter: blur(1.5px);
+            -webkit-backdrop-filter: blur(1.5px);
+            border: 1px solid rgba(185, 150, 52, 0.28);
+            border-radius: 6px;
+            padding: 1rem 1.3rem 0.9rem;
+            min-width: 172px;
+            max-width: 208px;
+            overflow: hidden;
         }
 
-        /* 文字阅读板块：独立卡片，与图片视觉分离 */
-        .scene-text-card {
-            background: rgba(12,12,18,0.92);
-            border: 1px solid rgba(200,170,100,0.12);
-            border-radius: 14px;
-            padding: 2rem 2.2rem;
-            backdrop-filter: blur(12px);
-            box-shadow: 0 2px 20px rgba(0,0,0,0.4);
-        }
-
-        /* 场景文字区 */
-        .scene-text {
-            line-height: 2;
-            font-size: 1.15rem;
-            letter-spacing: 0.05em;
-            text-shadow: 0 1px 4px rgba(0,0,0,0.5);
-            color: #e0d8c8;
-        white-space: pre-wrap; /* 【新增】：保留 AI 生成文本的换行符和空格 */
-        }
-
-        /* 选项卡片 */
-        .option-card {
-            border: 1px solid rgba(150,120,80,0.3);
-            background: rgba(30,25,20,0.6);
-            backdrop-filter: blur(8px);
-            border-radius: 10px;
-            padding: 14px 20px;
-            font-size: 1rem;
-            letter-spacing: 0.04em;
-            color: #c8b890;
-            transition: all 0.3s;
-        }
-        .option-card:hover { border-color: rgba(200,180,120,0.5); background: rgba(50,40,30,0.7); }
-
-        /* 角色状态条 */
-        .stat-bar-bg { background: rgba(255,255,255,0.1); border-radius: 4px; height: 6px; overflow: hidden; }
-        .stat-bar-fill { height: 100%; border-radius: 4px; transition: width 0.6s ease; }
-
-        /* 标题装饰 */
-        .scene-title {
-            font-size: 2rem;
-            font-weight: 900;
-            letter-spacing: 0.12em;
-            text-shadow: 0 0 30px rgba(200,170,100,0.4), 0 2px 8px rgba(0,0,0,0.9);
-            color: #f0dfa0;
-        }
-
-        /* 装饰分割线 */
-        .deco-line {
+        /* 顶部鎏金流光线 */
+        .pc-card::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 12%; right: 12%;
             height: 1px;
-            background: linear-gradient(to right, transparent, rgba(200,170,100,0.5), transparent);
-            margin: 1.5rem 0;
+            background: linear-gradient(
+                to right,
+                transparent,
+                rgba(218,182,82,0.7) 35%,
+                rgba(255,218,105,1) 50%,
+                rgba(218,182,82,0.7) 65%,
+                transparent
+            );
         }
 
-        /* 淡入动画 */
+        .pc-name {
+            font-size: 1rem;
+            font-weight: bold;
+            letter-spacing: 0.1em;
+            color: #f0e098;
+            text-shadow: 0 0 18px rgba(198,158,46,0.55);
+            margin-bottom: 0.7rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .pc-name::after {
+            content: '';
+            flex: 1;
+            height: 1px;
+            background: linear-gradient(to right, rgba(185,150,52,0.45), transparent);
+        }
+
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.68rem;
+            letter-spacing: 0.04em;
+            margin-bottom: 0.18rem;
+        }
+
+        .stat-label { color: rgba(198,162,65,0.75); }
+        .stat-val   { color: #ead896; font-weight: bold; }
+
+        .stat-bar-bg {
+            height: 3px;
+            background: rgba(255,255,255,0.07);
+            border-radius: 2px;
+            overflow: hidden;
+            margin-bottom: 0.5rem;
+        }
+        .stat-bar-fill { height: 100%; border-radius: 2px; transition: width 0.65s ease; }
+        .hp-bar  { background: linear-gradient(to right, #991b1b, #dc2626, #fca5a5); }
+        .san-bar { background: linear-gradient(to right, #78350f, #d97706, #fcd34d); }
+
+        .pc-inventory {
+            font-size: 0.62rem;
+            color: rgba(170,142,72,0.58);
+            line-height: 1.65;
+            margin-top: 0.3rem;
+            padding-top: 0.4rem;
+            border-top: 1px solid rgba(185,150,52,0.12);
+        }
+
+        /* ══════════════ 底部叙述区 ══════════════ */
+        .bottom-overlay {
+            position: absolute;
+            bottom: 0; left: 0; right: 0;
+            padding: 0 4rem 2.8rem;
+            z-index: 20;
+            display: flex;
+            flex-direction: column;
+            gap: 0.9rem;
+        }
+
+        /* 鎏金叙述文本框 */
+        .narrative-panel {
+            position: relative;
+            background-color: transparent;
+            /* 四角暗金 L 形花纹（角落亮、末端渐淡）*/
+            background-image:
+                linear-gradient(to right,  rgba(168,132,36,0.80), rgba(128,98,20,0.12)),   /* TL 横 */
+                linear-gradient(to bottom, rgba(168,132,36,0.80), rgba(128,98,20,0.12)),   /* TL 竖 */
+                linear-gradient(to left,   rgba(168,132,36,0.80), rgba(128,98,20,0.12)),   /* TR 横 */
+                linear-gradient(to bottom, rgba(168,132,36,0.80), rgba(128,98,20,0.12)),   /* TR 竖 */
+                linear-gradient(to right,  rgba(142,110,26,0.55), rgba(105,80,14,0.08)),   /* BL 横 */
+                linear-gradient(to top,    rgba(142,110,26,0.55), rgba(105,80,14,0.08)),   /* BL 竖 */
+                linear-gradient(to left,   rgba(142,110,26,0.55), rgba(105,80,14,0.08)),   /* BR 横 */
+                linear-gradient(to top,    rgba(142,110,26,0.55), rgba(105,80,14,0.08));   /* BR 竖 */
+            background-size:
+                32px 1px, 1px 32px,
+                32px 1px, 1px 32px,
+                32px 1px, 1px 32px,
+                32px 1px, 1px 32px;
+            background-position:
+                top left,    top left,
+                top right,   top right,
+                bottom left, bottom left,
+                bottom right, bottom right;
+            background-repeat: no-repeat;
+            border-radius: 2px;
+            padding: 1.3rem 2.2rem 1.5rem;
+            backdrop-filter: blur(2px);
+            -webkit-backdrop-filter: blur(2px);
+            overflow: hidden;
+        }
+
+        /* 顶部鎏金流光 */
+        .narrative-panel::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 1px;
+            background: linear-gradient(
+                to right,
+                transparent 0%,
+                rgba(200,162,55,0.18) 6%,
+                rgba(218,182,82,0.65) 22%,
+                rgba(255,218,105,1) 50%,
+                rgba(218,182,82,0.65) 78%,
+                rgba(200,162,55,0.18) 94%,
+                transparent 100%
+            );
+        }
+
+        /* 底部暗金收口线（与角纹呼应，居中渐隐） */
+        .narrative-panel::after {
+            content: '';
+            position: absolute;
+            bottom: 0; left: 10%; right: 10%;
+            height: 1px;
+            background: linear-gradient(to right, transparent, rgba(148,116,28,0.42) 28%, rgba(148,116,28,0.42) 72%, transparent);
+        }
+
+        /* 场景名称标题行 */
+        .narrative-header {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            margin-bottom: 0.9rem;
+        }
+
+        .deco-line-l {
+            flex: 1;
+            height: 1px;
+            background: linear-gradient(to right, rgba(185,150,52,0.5), rgba(185,150,52,0.08));
+        }
+
+        .deco-line-r {
+            flex: 1;
+            height: 1px;
+            background: linear-gradient(to left, rgba(185,150,52,0.5), rgba(185,150,52,0.08));
+        }
+
+        .narrative-scene-name {
+            font-size: 0.82rem;
+            letter-spacing: 0.28em;
+            color: rgba(205,168,60,0.88);
+            white-space: nowrap;
+            text-shadow: 0 0 12px rgba(198,158,46,0.4);
+        }
+
+        .narrative-text {
+            font-size: 1.12rem;
+            line-height: 2;
+            letter-spacing: 0.06em;
+            color: #e2d9c0;
+            text-shadow: 0 1px 6px rgba(0,0,0,0.85);
+            white-space: pre-wrap;
+            max-height: 28vh;
+            overflow-y: auto;
+            scrollbar-width: thin;
+            scrollbar-color: rgba(185,150,52,0.3) transparent;
+        }
+
+        .narrative-text::-webkit-scrollbar { width: 3px; }
+        .narrative-text::-webkit-scrollbar-track { background: transparent; }
+        .narrative-text::-webkit-scrollbar-thumb {
+            background: rgba(185,150,52,0.35);
+            border-radius: 2px;
+        }
+
+        /* ══════════════ 选项（左右网格布局） ══════════════ */
+        .options-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+            gap: 0.65rem;
+        }
+
+        .option-item {
+            position: relative;
+            background: transparent;
+            border: 1px solid rgba(168, 135, 42, 0.30);
+            border-radius: 3px;
+            padding: 0.8rem 1.15rem;
+            font-size: 0.92rem;
+            letter-spacing: 0.05em;
+            color: #c8b265;
+            backdrop-filter: blur(1px);
+            -webkit-backdrop-filter: blur(1px);
+            transition: all 0.22s ease;
+            cursor: default;
+            overflow: hidden;
+        }
+
+        /* 顶部流光线（hover 时激活） */
+        .option-item::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 1px;
+            background: linear-gradient(to right, transparent 8%, rgba(185,150,52,0.55) 50%, transparent 92%);
+            opacity: 0;
+            transition: opacity 0.22s;
+        }
+
+        /* 左侧金色竖线 */
+        .option-item::after {
+            content: '';
+            position: absolute;
+            top: 20%; bottom: 20%; left: 0;
+            width: 2px;
+            background: linear-gradient(to bottom, transparent, rgba(185,150,52,0.7) 40%, rgba(185,150,52,0.7) 60%, transparent);
+            opacity: 0;
+            transition: opacity 0.22s;
+        }
+
+        .option-item:hover {
+            background: rgba(8, 5, 30, 0.88);
+            border-color: rgba(205,168,60,0.65);
+            color: #eddfa0;
+            box-shadow:
+                0 0 20px rgba(185,150,52,0.1),
+                inset 0 1px 0 rgba(218,182,82,0.1);
+        }
+
+        .option-item:hover::before { opacity: 1; }
+        .option-item:hover::after  { opacity: 1; }
+
+        .option-num {
+            color: rgba(198,162,55,0.85);
+            font-weight: bold;
+            margin-right: 0.55rem;
+            font-size: 0.78em;
+        }
+
+        /* ══════════════ 动画 ══════════════ */
         @keyframes fadeInUp {
-            from { opacity: 0; transform: translateY(20px); }
+            from { opacity: 0; transform: translateY(12px); }
             to   { opacity: 1; transform: translateY(0); }
         }
-        .fade-in { animation: fadeInUp 0.7s ease forwards; }
-
-        /* 连接失败遮罩 */
-        .offline-mask {
-            position: fixed; inset: 0; z-index: 100;
-            background: rgba(0,0,0,0.9);
-            display: flex; align-items: center; justify-content: center;
-            flex-direction: column; gap: 1rem;
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to   { opacity: 1; }
+        }
+        @keyframes pulseGold {
+            0%, 100% { opacity: 0.12; }
+            50%      { opacity: 0.22; }
         }
 
-        /* 角色血条颜色 */
-        .hp-bar  { background: linear-gradient(to right, #ef4444, #f87171); }
-        .san-bar { background: linear-gradient(to right, #eab308, #fde047); }
+        .anim-fade-in-up { animation: fadeInUp 0.75s ease both; }
+        .anim-fade-in    { animation: fadeIn 1.5s ease both; }
+        .anim-delay-1    { animation-delay: 0.12s; }
+        .anim-delay-2    { animation-delay: 0.24s; }
 
-        /* BGM 音符跳动 */
-        @keyframes bounce1 { 0%,100%{height:6px} 50%{height:18px} }
-        @keyframes bounce2 { 0%,100%{height:12px} 50%{height:6px} }
-        @keyframes bounce3 { 0%,100%{height:8px} 50%{height:16px} }
-        .bar1 { animation: bounce1 0.8s ease-in-out infinite; }
-        .bar2 { animation: bounce2 0.9s ease-in-out infinite; }
-        .bar3 { animation: bounce3 0.7s ease-in-out infinite; }
+        /* ══════════════ 离线遮罩 ══════════════ */
+        .offline-mask {
+            position: fixed; inset: 0; z-index: 200;
+            background: rgba(2,1,12,0.97);
+            display: flex; align-items: center; justify-content: center;
+            flex-direction: column; gap: 1.2rem;
+        }
+
+        .offline-icon {
+            font-size: 1.8rem;
+            color: rgba(170,55,55,0.55);
+            letter-spacing: 0.2em;
+        }
+
+        .offline-title {
+            font-size: 1.4rem;
+            color: rgba(175,142,55,0.75);
+            letter-spacing: 0.25em;
+        }
+
+        .offline-sub {
+            font-size: 0.8rem;
+            color: rgba(110,92,50,0.55);
+            letter-spacing: 0.04em;
+        }
+
+        /* ══════════════ 等待场景 ══════════════ */
+        .waiting-screen {
+            position: absolute; inset: 0; z-index: 10;
+            display: flex; align-items: center; justify-content: center;
+            flex-direction: column; gap: 1.5rem;
+        }
+
+        .waiting-icon {
+            font-size: 3.5rem;
+            animation: pulseGold 3.5s ease-in-out infinite;
+            filter: sepia(1) saturate(0.6);
+        }
+
+        .waiting-text {
+            font-size: 1.1rem;
+            color: rgba(185,150,52,0.32);
+            letter-spacing: 0.4em;
+        }
     </style>
 </head>
 <body>
 <div id="app">
 
-    <!-- 离线遮罩 -->
+    <!-- ── 离线遮罩 ── -->
     <div v-if="!connected" class="offline-mask">
-        <div class="text-5xl">🔴</div>
-        <div class="text-2xl font-bold text-gray-300">等待 GM 引擎连接...</div>
-        <div class="text-gray-500 text-sm">正在尝试连接 {{ API_BASE_URL }}</div>
-        <div class="flex gap-1 mt-2">
-            <div class="w-2 h-2 rounded-full bg-gray-600 animate-bounce" style="animation-delay:0s"></div>
-            <div class="w-2 h-2 rounded-full bg-gray-600 animate-bounce" style="animation-delay:.2s"></div>
-            <div class="w-2 h-2 rounded-full bg-gray-600 animate-bounce" style="animation-delay:.4s"></div>
+        <div class="offline-icon">◈</div>
+        <div class="offline-title">等待 GM 引擎连接</div>
+        <div class="offline-sub">正在连接 {{ API_BASE_URL }}</div>
+        <div class="flex gap-2 mt-1">
+            <div class="w-1.5 h-1.5 rounded-full animate-bounce"
+                 style="background:rgba(175,142,55,0.4);animation-delay:0s"></div>
+            <div class="w-1.5 h-1.5 rounded-full animate-bounce"
+                 style="background:rgba(175,142,55,0.4);animation-delay:.2s"></div>
+            <div class="w-1.5 h-1.5 rounded-full animate-bounce"
+                 style="background:rgba(175,142,55,0.4);animation-delay:.4s"></div>
         </div>
-        <div class="text-gray-600 text-xs mt-4 max-w-md text-center leading-relaxed">
-            <span v-if="wsConnected === false && connectAttempts > 2">
-                WebSocket 重连中（第 {{ connectAttempts }} 次）...<br>
-            </span>
-            提示：请确保 NEXUS 引擎已启动，建议通过
-            <a href="http://localhost:8000/player.html" class="text-amber-600 underline">http://localhost:8000/player.html</a>
+        <div v-if="wsConnected === false && connectAttempts > 2" class="offline-sub mt-1">
+            WebSocket 重连中（第 {{ connectAttempts }} 次）
+        </div>
+        <div class="offline-sub" style="max-width:400px;text-align:center;line-height:2;margin-top:.5rem">
+            请确保 NEXUS 引擎已启动，通过
+            <a href="http://localhost:8000/player.html"
+               style="color:rgba(175,142,55,0.7);text-decoration:underline">
+                http://localhost:8000/player.html
+            </a>
             访问此页面
         </div>
     </div>
 
-    <!-- 主界面 -->
-    <div v-if="connected && currentScene" class="min-h-screen flex flex-col lg:flex-row">
+    <!-- ── 主界面 ── -->
+    <template v-if="connected && currentScene">
 
-        <!-- 左侧：场景主展示区 -->
-        <div class="scene-main lg:w-2/3">
+        <!-- 模糊氛围底层（侧边填充 + 下方过渡区，同图源极度模糊暗化） -->
+        <img v-if="sceneImage"
+             :src="sceneImage"
+             class="scene-bg-blur"
+             alt="" />
+        <!-- 主图：上方 80vh 区域，contain 完整展示 -->
+        <img v-if="sceneImage"
+             :src="sceneImage"
+             class="scene-bg-img anim-fade-in"
+             alt=""
+             @error="sceneImage = null" />
+        <!-- 侧边渐变模糊：左右各一面板 -->
+        <div v-if="sceneImage" class="scene-side-panel scene-side-panel-left">
+            <img :src="sceneImage" alt="" />
+        </div>
+        <div v-if="sceneImage" class="scene-side-panel scene-side-panel-right">
+            <img :src="sceneImage" alt="" />
+        </div>
+        <div v-else class="scene-bg-default"></div>
 
-            <!-- 场景标题 -->
-            <div class="fade-in">
-                <div class="text-xs text-amber-600 tracking-widest uppercase mb-2 font-bold">📍 当前场景</div>
-                <h1 class="scene-title">{{ currentScene.name }}</h1>
-            </div>
+        <!-- 渐变遮罩 -->
+        <div class="screen-vignette"></div>
 
-            <!-- 场景图片（独立展示） -->
-            <div v-if="sceneImage" class="fade-in">
-                <img :src="sceneImage" alt="场景插图" class="scene-hero-image" @error="sceneImage=null">
-                <div v-if="sceneAiText" class="scene-prompt-box">
-                    <span style="opacity:.6;margin-right:4px">✦ 深入调查 · </span>{{ sceneAiText }}
+        <!-- 主角状态 HUD（左上角，半透明浮层） -->
+        <div v-if="pcChars.length" class="pc-hud">
+            <div v-for="char in pcChars" :key="char.id" class="pc-card anim-fade-in-up">
+                <div class="pc-name">{{ char.name }}</div>
+                <div class="stat-row">
+                    <span class="stat-label">❤ HP</span>
+                    <span class="stat-val">{{ char.hp }}</span>
                 </div>
+                <div class="stat-bar-bg">
+                    <div class="stat-bar-fill hp-bar"
+                         :style="{width: Math.min(100, char.hp) + '%'}"></div>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">✦ SAN</span>
+                    <span class="stat-val">{{ char.san }}</span>
+                </div>
+                <div class="stat-bar-bg">
+                    <div class="stat-bar-fill san-bar"
+                         :style="{width: Math.min(100, char.san) + '%'}"></div>
+                </div>
+                <div v-if="char.inventory" class="pc-inventory">{{ char.inventory }}</div>
+            </div>
+        </div>
+
+        <!-- 底部叙述区 -->
+        <div class="bottom-overlay">
+
+            <!-- 鎏金叙述文本框 -->
+            <div class="narrative-panel anim-fade-in-up">
+                <div class="narrative-header">
+                    <div class="deco-line-l"></div>
+                    <div class="narrative-scene-name">{{ currentScene.name }}</div>
+                    <div class="deco-line-r"></div>
+                </div>
+                <div class="narrative-text">{{ currentScene.expanded_content || currentScene.content }}</div>
             </div>
 
-            <!-- 文字阅读板块（独立卡片） -->
-            <div class="scene-text-card fade-in" style="animation-delay:.1s">
-                <div class="scene-text">{{ currentScene.expanded_content || currentScene.content }}</div>
-
-                <!-- 选项列表（内嵌在文字卡片底部） -->
-                <div v-if="currentScene.options && currentScene.options.length" class="mt-6 pt-5" style="border-top:1px solid rgba(200,170,100,0.12)">
-                    <div class="text-xs text-gray-500 tracking-widest uppercase font-bold mb-3">⚔️ 可选行动</div>
-                    <div class="space-y-3">
-                        <div v-for="(opt, i) in currentScene.options.filter(o => !o._trigger)" :key="i" class="option-card">
-                            <span class="text-amber-600 font-bold mr-3">{{ ['Ⅰ','Ⅱ','Ⅲ','Ⅳ','Ⅴ','Ⅵ'][i] || (i+1) }}</span>
-                            {{ opt.text }}
-                        </div>
-                    </div>
+            <!-- 选项：左右网格布局 -->
+            <div v-if="currentScene.options && currentScene.options.filter(o => !o._trigger).length"
+                 class="options-grid anim-fade-in-up anim-delay-1">
+                <div v-for="(opt, i) in currentScene.options.filter(o => !o._trigger)"
+                     :key="i"
+                     class="option-item">
+                    <span class="option-num">{{ ['Ⅰ','Ⅱ','Ⅲ','Ⅳ','Ⅴ','Ⅵ'][i] || (i+1) }}</span>{{ opt.text }}
                 </div>
             </div>
 
         </div>
+    </template>
 
-        <!-- 右侧边栏 (1/3) -->
-        <div class="lg:w-80 flex-shrink-0 p-6 lg:p-8 flex flex-col gap-6 border-t lg:border-t-0 lg:border-l border-gray-800/60">
-
-            <!-- BGM 状态 -->
-            <div class="bg-gray-900/60 rounded-xl p-4 border border-gray-800/80 backdrop-blur-sm">
-                <div class="flex items-center gap-3 mb-1">
-                    <!-- 音符跳动动画 -->
-                    <div v-if="bgmPlaying" class="flex items-end gap-0.5 h-5">
-                        <div class="w-1 rounded-sm bg-amber-500 bar1"></div>
-                        <div class="w-1 rounded-sm bg-amber-400 bar2"></div>
-                        <div class="w-1 rounded-sm bg-amber-500 bar3"></div>
-                    </div>
-                    <span v-else class="text-gray-500 text-lg">🎵</span>
-                    <span class="text-amber-400 text-sm font-bold tracking-wide truncate">{{ bgmName || '无背景音乐' }}</span>
-                </div>
-            </div>
-
-            <!-- 角色面板 -->
-            <div>
-                <div class="text-xs text-gray-500 tracking-widest uppercase font-bold mb-3">👥 冒险者</div>
-                <div class="space-y-4">
-                    <div v-for="char in pcChars" :key="char.id"
-                        class="bg-gray-900/70 border border-gray-800/80 rounded-xl p-4 backdrop-blur-sm">
-                        <div class="flex items-center justify-between mb-3">
-                            <div>
-                                <span class="text-white font-bold text-base">{{ char.name }}</span>
-                                <span class="text-xs text-gray-500 ml-2">PC</span>
-                            </div>
-                        </div>
-                        <!-- HP -->
-                        <div class="mb-2">
-                            <div class="flex justify-between text-xs mb-1">
-                                <span class="text-red-400 font-bold">❤️ HP</span>
-                                <span class="text-red-300 font-bold">{{ char.hp }}</span>
-                            </div>
-                            <div class="stat-bar-bg">
-                                <div class="stat-bar-fill hp-bar" :style="{width: Math.min(100, char.hp) + '%'}"></div>
-                            </div>
-                        </div>
-                        <!-- SAN -->
-                        <div class="mb-3">
-                            <div class="flex justify-between text-xs mb-1">
-                                <span class="text-yellow-400 font-bold">🧠 SAN</span>
-                                <span class="text-yellow-300 font-bold">{{ char.san }}</span>
-                            </div>
-                            <div class="stat-bar-bg">
-                                <div class="stat-bar-fill san-bar" :style="{width: Math.min(100, char.san) + '%'}"></div>
-                            </div>
-                        </div>
-                        <!-- 物品 -->
-                        <div v-if="char.inventory" class="text-xs text-gray-400 leading-relaxed">
-                            <span class="text-gray-600">🎒</span> {{ char.inventory }}
-                        </div>
-                    </div>
-
-                    <div v-if="!pcChars.length" class="text-gray-600 text-sm text-center py-4">
-                        暂无角色数据
-                    </div>
-                </div>
-            </div>
-
-            <!-- NPC 列表（折叠显示） -->
-            <div v-if="npcChars.length">
-                <div class="text-xs text-gray-500 tracking-widest uppercase font-bold mb-3">🎭 当前相关 NPC</div>
-                <div class="space-y-2">
-                    <div v-for="npc in npcChars" :key="npc.id"
-                        class="bg-amber-950/40 border border-amber-900/40 rounded-lg p-3">
-                        <div class="flex justify-between items-center">
-                            <span class="text-amber-300 font-bold text-sm">{{ npc.name }}</span>
-                            <span class="text-xs text-gray-500">HP {{ npc.hp }} / SAN {{ npc.san }}</span>
-                        </div>
-                        <div v-if="npc.inventory" class="text-xs text-amber-700 mt-1 truncate">{{ npc.inventory }}</div>
-                    </div>
-                </div>
-            </div>
-
+    <!-- ── 等待场景 ── -->
+    <template v-if="connected && !currentScene">
+        <div class="scene-bg-default"></div>
+        <div class="waiting-screen">
+            <div class="waiting-icon">⚔</div>
+            <div class="waiting-text">等待 GM 选择场景</div>
         </div>
-    </div>
+    </template>
 
-    <!-- 等待场景 -->
-    <div v-if="connected && !currentScene" class="min-h-screen flex flex-col items-center justify-center gap-6 text-center p-8">
-        <div class="text-7xl opacity-40">🗺️</div>
-        <div class="text-2xl font-bold text-gray-600 tracking-widest">等待 GM 选择场景...</div>
-    </div>
-
-    <!-- 隐藏音频 -->
+    <!-- 背景音频（保留功能，隐藏 UI） -->
     <audio ref="audioRef" loop></audio>
 
 </div>
@@ -304,7 +559,7 @@ const { createApp, ref, computed, onMounted, onUnmounted, watch } = Vue;
 
 const API_BASE_URL = "http://localhost:8000";
 const WS_URL = API_BASE_URL.replace(/^http/, 'ws') + "/ws/player";
-const FALLBACK_POLL_INTERVAL = 5000; // WebSocket 断开时降级为 5 秒轮询
+const FALLBACK_POLL_INTERVAL = 5000;
 
 createApp({
     setup() {
@@ -327,25 +582,20 @@ createApp({
         let ws             = null;
         let reconnectTimer = null;
         let pollTimer      = null;
-        let reconnectDelay = 1000; // 指数退避起始值
+        let reconnectDelay = 1000;
 
         const pcChars  = computed(() => characters.value.filter(c => c.role === 'PC'));
         const npcChars = computed(() => characters.value.filter(c => c.role === 'NPC'));
 
-        // ── 处理来自 WebSocket 或 REST 的状态数据 ──
         const applyState = (data) => {
-            // 角色数据
             if (data.characters) {
                 characters.value = data.characters;
             }
-            // 当前场景
             const sceneId = data.current_scene_id;
             if (sceneId) {
-                // WebSocket 推送包含完整场景数据
                 if (data.current_scene) {
-                    const contentChanged = !currentScene.value || 
+                    const contentChanged = !currentScene.value ||
                                            currentScene.value.content !== data.current_scene.content;
-                    
                     if (lastSceneId !== sceneId || contentChanged) {
                         lastSceneId = sceneId;
                         currentScene.value = data.current_scene;
@@ -353,12 +603,10 @@ createApp({
                         scenePrompt.value = data.scene_prompt || '';
                     }
                 } else {
-                    // REST 兜底：从 storyNodes 查找
                     const found = storyNodes.value.find(n => n.id === sceneId);
                     if (found) {
                         const contentChanged = !currentScene.value ||
                                                currentScene.value.content !== found.content;
-
                         if (lastSceneId !== sceneId || contentChanged) {
                             lastSceneId = sceneId;
                             currentScene.value = found;
@@ -373,7 +621,6 @@ createApp({
                 lastSceneId = null;
             }
 
-            // BGM
             const newBgmUrl  = data.bgm_url  || '';
             const newBgmName = data.bgm_name || '';
             if (newBgmUrl !== lastBgmUrl) {
@@ -394,11 +641,8 @@ createApp({
             connected.value = true;
         };
 
-        // ── WebSocket 连接管理 ──
         const connectWs = () => {
-            if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) {
-                return; // 已有连接
-            }
+            if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) return;
             try {
                 ws = new WebSocket(WS_URL);
 
@@ -407,49 +651,32 @@ createApp({
                     connectAttempts.value = 0;
                     reconnectDelay = 1000;
                     if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
-                    console.log('[投屏] WebSocket 已连接');
                 };
 
                 ws.onmessage = (event) => {
                     try {
                         const data = JSON.parse(event.data);
                         if (data.type === 'ping') return;
-                        if (data.type === 'state_update') {
-                            applyState(data);
-                        }
-                    } catch (e) {
-                        console.warn('[投屏] WebSocket 消息解析失败', e);
-                    }
+                        if (data.type === 'state_update') applyState(data);
+                    } catch (e) {}
                 };
 
                 ws.onclose = () => {
                     wsConnected.value = false;
                     connectAttempts.value++;
-                    console.log('[投屏] WebSocket 断开，' + (reconnectDelay/1000) + '秒后重连...');
-                    // 断开后启动降级轮询
-                    if (!pollTimer) {
-                        pollTimer = setInterval(pollFallback, FALLBACK_POLL_INTERVAL);
-                    }
-                    // 指数退避重连
+                    if (!pollTimer) pollTimer = setInterval(pollFallback, FALLBACK_POLL_INTERVAL);
                     reconnectTimer = setTimeout(() => {
                         reconnectDelay = Math.min(reconnectDelay * 2, 30000);
                         connectWs();
                     }, reconnectDelay);
                 };
 
-                ws.onerror = () => {
-                    // onerror 后会自动触发 onclose，无需额外处理
-                };
+                ws.onerror = () => {};
             } catch (e) {
-                console.warn('[投屏] WebSocket 创建失败', e);
-                // 降级轮询
-                if (!pollTimer) {
-                    pollTimer = setInterval(pollFallback, FALLBACK_POLL_INTERVAL);
-                }
+                if (!pollTimer) pollTimer = setInterval(pollFallback, FALLBACK_POLL_INTERVAL);
             }
         };
 
-        // ── REST 降级轮询（WebSocket 断开时使用）──
         const pollFallback = async () => {
             try {
                 const [stateRes, playerStateRes] = await Promise.all([
@@ -457,10 +684,8 @@ createApp({
                     fetch(`${API_BASE_URL}/api/player/state`),
                 ]);
                 if (!stateRes.ok) throw new Error('state failed');
-
                 const stateData  = await stateRes.json();
                 storyNodes.value = stateData.nodes || [];
-
                 if (playerStateRes.ok) {
                     const ps = await playerStateRes.json();
                     applyState({ ...ps, characters: stateData.characters || [] });
@@ -471,23 +696,20 @@ createApp({
         };
 
         onMounted(() => {
-            // 先做一次 REST 请求获取初始状态（确保页面不空白）
             pollFallback();
-            // 然后建立 WebSocket 连接
             connectWs();
-
             if (audioRef.value) {
                 audioRef.value.volume = 0.5;
-                audioRef.value.addEventListener('ended',  () => { bgmPlaying.value = false; });
+                audioRef.value.addEventListener('ended',   () => { bgmPlaying.value = false; });
                 audioRef.value.addEventListener('playing', () => { bgmPlaying.value = true; });
                 audioRef.value.addEventListener('pause',   () => { bgmPlaying.value = false; });
             }
         });
 
         onUnmounted(() => {
-            if (pollTimer) clearInterval(pollTimer);
+            if (pollTimer)      clearInterval(pollTimer);
             if (reconnectTimer) clearTimeout(reconnectTimer);
-            if (ws) ws.close();
+            if (ws)             ws.close();
         });
 
         return {

@@ -1292,6 +1292,35 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:14px; h
     </div>
 </div>
 
+<!-- 存档选项 -->
+<div v-if="showExportModal" class="modal-bg" @click.self="showExportModal=false">
+    <div style="background:#0d1117;border:1px solid rgba(255,255,255,.1);border-radius:12px;padding:28px;width:360px;display:flex;flex-direction:column;gap:12px">
+        <div style="font-size:14px;font-weight:600;color:#c9cdd6">保存存档</div>
+        <template v-if="!exportShowNameInput">
+            <button @click="doExportOverwrite" :disabled="!currentSaveFolder" class="btn" style="justify-content:flex-start;gap:10px;padding:12px 16px" :style="currentSaveFolder?{}:{opacity:.4,cursor:'not-allowed'}">
+                <i class="ph ph-floppy-disk" style="font-size:18px;flex-shrink:0"></i>
+                <div style="text-align:left">
+                    <div style="font-size:13px;font-weight:600">覆盖当前存档</div>
+                    <div style="font-size:11px;margin-top:2px" :style="{color:currentSaveFolder?'#6b7280':'#4b5563'}">{{ currentSaveFolder || '无当前存档' }}</div>
+                </div>
+            </button>
+            <button @click="exportShowNameInput=true" class="btn" style="justify-content:flex-start;gap:10px;padding:12px 16px">
+                <i class="ph ph-plus-circle" style="font-size:18px;flex-shrink:0"></i>
+                <div style="font-size:13px;font-weight:600">创建新存档</div>
+            </button>
+            <button @click="showExportModal=false" class="btn btn-ghost" style="justify-content:center;padding:10px 16px">取消</button>
+        </template>
+        <template v-else>
+            <div style="font-size:12px;color:#6b7280">输入存档名（留空使用时间戳）</div>
+            <input v-model="exportNewName" @keyup.enter="doExportNew" class="inp" placeholder="如：第一章结局前" style="font-size:13px">
+            <div style="display:flex;gap:8px">
+                <button @click="exportShowNameInput=false" class="btn btn-ghost" style="flex:1;justify-content:center">返回</button>
+                <button @click="doExportNew" class="btn" style="flex:2;justify-content:center;background:rgba(248,113,113,.12);border-color:rgba(248,113,113,.4);color:#f87171"><i class="ph ph-floppy-disk"></i> 保存</button>
+            </div>
+        </template>
+    </div>
+</div>
+
 <!-- 战报导出 -->
 <div v-if="showBattleReportModal" class="modal-bg" @click.self="showBattleReportModal=false">
     <div class="modal-box" style="width:800px;height:85vh">
@@ -3001,6 +3030,10 @@ createApp({
         let statChangesTimer = null;
         const showBattleReportModal = ref(false);
         const battleReport = ref('');
+        const showExportModal = ref(false);
+        const exportShowNameInput = ref(false);
+        const exportNewName = ref('');
+        const currentSaveFolder = ref('');
         const isGeneratingReport = ref(false);
         const battleReportFilename = ref('');
         const leftTab = ref('list');
@@ -3663,9 +3696,11 @@ createApp({
             const idx = available.indexOf(activeAiModel.value);
             switchAiModel(available[(idx + 1) % available.length]);
         };
-        const loadAndStart = async () => { if(!selectedCampaign.value)return; isLoading.value=true; isExpandingBranch.value=false; expandingBranchText.value=''; try { const r=await fetch(`${API_BASE_URL}/api/game/load`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({filename:selectedCampaign.value})}); if(r.ok){await fetchGameState();appState.value='game';} } catch(e){} finally{isLoading.value=false;} };
+        const loadAndStart = async () => { if(!selectedCampaign.value)return; isLoading.value=true; isExpandingBranch.value=false; expandingBranchText.value=''; try { const r=await fetch(`${API_BASE_URL}/api/game/load`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({filename:selectedCampaign.value})}); if(r.ok){ const parts=selectedCampaign.value.split('/'); currentSaveFolder.value=parts[parts.length-1]; await fetchGameState();appState.value='game';} } catch(e){} finally{isLoading.value=false;} };
         const enterCurrentGame = async () => { await fetchGameState(); appState.value='game'; };
-        const exportSave = async () => { try { const saveName = prompt('请输入存档名（留空使用时间戳）：','') ?? ''; const r=await fetch(`${API_BASE_URL}/api/game/export`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({save_name:saveName})}); const d=await r.json(); if(r.ok){alert(`存档保存成功：\ncampaigns/${d.folder}/`);fetchCampaigns();} } catch(e){} };
+        const exportSave = () => { exportShowNameInput.value=false; exportNewName.value=''; showExportModal.value=true; };
+        const doExportOverwrite = async () => { showExportModal.value=false; try { const r=await fetch(`${API_BASE_URL}/api/game/export`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({save_name:currentSaveFolder.value})}); const d=await r.json(); if(r.ok){currentSaveFolder.value=d.folder;fetchCampaigns();} } catch(e){} };
+        const doExportNew = async () => { showExportModal.value=false; const name=exportNewName.value.trim(); exportNewName.value=''; try { const r=await fetch(`${API_BASE_URL}/api/game/export`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({save_name:name})}); const d=await r.json(); if(r.ok){currentSaveFolder.value=d.folder;fetchCampaigns();} } catch(e){} };
 
         // ── Game State ──
         const syncEditData = () => { if(currentNode.value) editData.value={...currentNode.value}; };
@@ -4734,7 +4769,7 @@ createApp({
             ragUploadFile, ragDragOver, ragChunkSize, ragChunkOverlap, ragTopK,
             openRagModal, ragImport, ragIngest, ragDeleteDoc, ragSearch,
             ragHandleFileSelect, ragHandleDrop,
-            fetchCampaigns, loadAndStart, enterCurrentGame: enterCurrentGameWithTl, exportSave, fetchGameState, jumpToNode, saveNodeChanges, createNewNode, deleteCurrentNode, addManualOption, deleteOption, saveStatLabels, saveCharacterState, createCharacter, deleteCharacter, generateNPC, resetNewChar, openWorldviewModal, saveWorldview, openMemoryModal, saveMemory, openLorebookModal, saveLore, deleteLore, fetchTriggers, openTriggerModal, newTrigger, selectTrigger, saveTrigger, deleteTrigger, resetTriggerFired, generateAIText, generateDynamicOptions, openBattleReportModal, generateBattleReport, downloadBattleReport, generateImage, togglePlay, changeTrack, doTimeSkip, doForceThrust, fatePick,
+            fetchCampaigns, loadAndStart, enterCurrentGame: enterCurrentGameWithTl, exportSave, doExportOverwrite, doExportNew, showExportModal, exportShowNameInput, exportNewName, currentSaveFolder, fetchGameState, jumpToNode, saveNodeChanges, createNewNode, deleteCurrentNode, addManualOption, deleteOption, saveStatLabels, saveCharacterState, createCharacter, deleteCharacter, generateNPC, resetNewChar, openWorldviewModal, saveWorldview, openMemoryModal, saveMemory, openLorebookModal, saveLore, deleteLore, fetchTriggers, openTriggerModal, newTrigger, selectTrigger, saveTrigger, deleteTrigger, resetTriggerFired, generateAIText, generateDynamicOptions, openBattleReportModal, generateBattleReport, downloadBattleReport, generateImage, togglePlay, changeTrack, doTimeSkip, doForceThrust, fatePick,
             // GM 干预
             gmCorrection, lastDynamicContext, retryWithCorrection,
             // NPC Persona

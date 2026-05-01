@@ -1525,7 +1525,7 @@ def generate_image(request: ImageGenRequest):
             resp = _doubao_client.images.generate(
                 model="doubao-seedream-5-0-260128",
                 prompt=full_prompt,
-                size="2K",
+                size="3136x1344",
                 response_format="url",
                 extra_body={"watermark": False},
             )
