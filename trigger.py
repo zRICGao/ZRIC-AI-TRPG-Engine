@@ -213,16 +213,23 @@ def _judge_leaf(node: dict, scene_id: int, chars: list, all_inv: str) -> bool | 
         return any(k in all_inv for k in kws)
 
     if ctype == "stat":
+        _OPS = [("<=", lambda a, b: a <= b), (">=", lambda a, b: a >= b),
+                ("<",  lambda a, b: a < b),  (">",  lambda a, b: a > b),
+                ("==", lambda a, b: a == b)]
         for part in cval.split(","):
             part = part.strip().lower()
-            for attr in ("hp", "san"):
-                if part.startswith(attr + "<"):
+            for op_str, op_fn in _OPS:
+                if op_str in part:
+                    attr, _, thr_str = part.partition(op_str)
+                    attr = attr.strip()
                     try:
-                        thr = int(part.split("<")[1])
-                        if any(c["role"] == "PC" and int(c[attr] or 0) < thr for c in chars):
+                        thr = int(thr_str.strip())
+                        if any(c["role"] == "PC" and op_fn(int(c.get(attr) or 0), thr)
+                               for c in chars):
                             return True
-                    except (ValueError, IndexError):
+                    except (ValueError, TypeError):
                         pass
+                    break
         return False
 
     if ctype == "ai":
@@ -236,8 +243,8 @@ def _judge_leaf(node: dict, scene_id: int, chars: list, all_inv: str) -> bool | 
 # ---------------------------------------------------------
 def _eval_tree(node: dict, scene_id: int, chars: list, all_inv: str,
                ai_cache: dict, _depth: int = 0) -> bool:
-    if _depth > 8:
-        _log.warning("条件树深度超限（>8），截断求值返回 False")
+    if _depth > 20:
+        _log.warning("条件树深度超限（>20），截断求值返回 False")
         return False
     if "op" in node:
         op = node["op"]
@@ -260,6 +267,60 @@ def _eval_tree(node: dict, scene_id: int, chars: list, all_inv: str,
 
 
 # ---------------------------------------------------------
+# 三值预求值（True / False / _MAYBE）— AI 剪枝
+# ---------------------------------------------------------
+_MAYBE = object()  # 哨兵：AI 条件结果未知，需调用后确定
+
+
+def _eval_tree_3val(node: dict, scene_id: int, chars: list, all_inv: str,
+                    ai_cache: dict, _depth: int = 0):
+    """
+    在调用 AI 前做剪枝：非 AI 条件按短路逻辑求值，AI 条件返回 _MAYBE。
+    返回 True/False 表示已由非 AI 条件确定结果；返回 _MAYBE 则需要 AI。
+    已在 ai_cache 中的 AI 条件直接读缓存，视为已知值。
+    """
+    if _depth > 20:
+        return False
+    if "op" in node:
+        op = node["op"]
+        children = node.get("children", [])
+        if not children:
+            return False
+        if op == "and":
+            has_maybe = False
+            for c in children:
+                r = _eval_tree_3val(c, scene_id, chars, all_inv, ai_cache, _depth + 1)
+                if r is False:
+                    return False        # AND 短路：某非 AI 条件已失败，整体为 False
+                if r is _MAYBE:
+                    has_maybe = True
+            return _MAYBE if has_maybe else True
+        if op == "or":
+            has_maybe = False
+            for c in children:
+                r = _eval_tree_3val(c, scene_id, chars, all_inv, ai_cache, _depth + 1)
+                if r is True:
+                    return True        # OR 短路：某非 AI 条件已满足，整体为 True
+                if r is _MAYBE:
+                    has_maybe = True
+            return _MAYBE if has_maybe else False
+        if op == "not":
+            r = _eval_tree_3val(children[0], scene_id, chars, all_inv, ai_cache, _depth + 1)
+            if r is _MAYBE:
+                return _MAYBE
+            return not r
+        return False
+    # 叶节点
+    r = _judge_leaf(node, scene_id, chars, all_inv)
+    if r is None:                      # ai 类型
+        key = node.get("value", "").strip()
+        if key in ai_cache:
+            return bool(ai_cache[key]) # 命中跨触发器缓存，视为已知
+        return _MAYBE
+    return r
+
+
+# ---------------------------------------------------------
 # AI 批量判断（judgements 表仅作审计，不作缓存读路径）
 # ---------------------------------------------------------
 def _batch_judge_ai(values: list[str], scene_name: str, scene_content: str,
@@ -273,8 +334,8 @@ def _batch_judge_ai(values: list[str], scene_name: str, scene_content: str,
         return {}
 
     # ── 调用 AI ────────────────────────────────────────────────────────────
-    worldview, party_status, relevant_lore, session_memory, \
-        l1_context, world_entities_text, rag_context, map_context = \
+    worldview, party_status, _, session_memory, \
+        _, world_entities_text, _, _ = \
         _fn_get_system_context(conn, scene_name, scene_content)
 
     n = len(values)
@@ -403,7 +464,14 @@ def _check_trigger(trigger_row, scene_id: int, scene_name: str,
     if not tree.get("children"):
         return False
 
-    # 收集未缓存的 AI 条件，批量请求
+    # ── 三值预求值：非 AI 条件短路剪枝，结果确定时直接返回，跳过 AI 调用 ──
+    pre = _eval_tree_3val(tree, scene_id, chars, all_inv, ai_cache)
+    if pre is False:
+        return False
+    if pre is True:
+        return True
+
+    # 只有 _MAYBE（非 AI 条件无法单独确定结果）才收集 AI 条件并批量请求
     ai_leaves = _collect_ai_leaves(tree)
     new_ai = [v for v in ai_leaves if v and v not in ai_cache]
     if new_ai:
@@ -468,7 +536,7 @@ def update_trigger(tid: int, req: TriggerUpdateRequest):
         conditions_json = _normalize_conditions(req)
         conn.execute(
             "UPDATE triggers SET label=?, target_node_id=?, mode=?, "
-            "cond_type=?, cond_value=?, conditions=?, fired=0, fire_count=0, "
+            "cond_type=?, cond_value=?, conditions=?, "
             "cooldown=?, prerequisite_trigger_ids=?, exclude_trigger_ids=? "
             "WHERE id=?",
             (req.label[:80], req.target_node_id, req.mode,

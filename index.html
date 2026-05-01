@@ -294,12 +294,12 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:14px; h
                             @click="switchAiModel(m.key)" :disabled="!m.available"
                             class="btn btn-sm" style="flex:1;padding:10px 14px;font-size:13px;transition:all .15s"
                             :style="activeAiModel===m.key
-                                ? {background: m.key==='deepseek' ? 'rgba(56,189,248,.12)' : 'rgba(167,139,250,.12)',
-                                   borderColor: m.key==='deepseek' ? 'rgba(56,189,248,.4)' : 'rgba(167,139,250,.4)',
-                                   color: m.key==='deepseek' ? '#38bdf8' : '#a78bfa',
-                                   boxShadow: m.key==='deepseek' ? '0 0 12px rgba(56,189,248,.15)' : '0 0 12px rgba(167,139,250,.15)'}
+                                ? {background:`rgba(${modelAccentRgb(m.key)},.12)`,
+                                   borderColor:`rgba(${modelAccentRgb(m.key)},.4)`,
+                                   color: modelAccentColor(m.key),
+                                   boxShadow:`0 0 12px rgba(${modelAccentRgb(m.key)},.15)`}
                                 : {background:'#090b10', borderColor:'rgba(255,255,255,.07)', color: m.available ? '#6b7280' : '#374151'}">
-                        <i :class="m.key==='deepseek' ? 'ph ph-lightning' : 'ph ph-brain'"
+                        <i :class="modelIcon(m.key)"
                            style="font-size:15px;margin-right:6px"
                            :style="{opacity: m.available ? 1 : 0.3}"></i>
                         <span>{{ m.label }}</span>
@@ -308,7 +308,7 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:14px; h
                     </button>
                 </div>
                 <div style="font-size:11px;color:#4b5563;margin-top:6px;padding-left:2px">
-                    {{ activeAiModel==='deepseek' ? 'DeepSeek Chat — 速度快、中文优秀、JSON 格式稳定' : 'Claude Opus 4.6 — 推理深度强、角色扮演细腻、需 Anthropic API Key' }}
+                    {{ activeAiModel==='claude-opus' ? 'Claude Opus 4.6 — 推理深度强、角色扮演细腻、需 Anthropic API Key' : activeAiModel==='deepseek-pro' ? 'DeepSeek V4 Pro — 旗舰版、上下文 1M、适合复杂长链推演' : 'DeepSeek V4 Flash — 速度快、中文优秀、JSON 格式稳定' }}
                 </div>
             </div>
 
@@ -358,15 +358,15 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:14px; h
 
             <!-- AI 模型指示器 -->
             <div style="display:flex;align-items:center;gap:6px;margin-left:20px;padding:4px 10px;border-radius:4px;cursor:pointer"
-                 :style="{background: activeAiModel==='deepseek' ? 'rgba(56,189,248,.06)' : 'rgba(167,139,250,.06)',
-                          border: '1px solid ' + (activeAiModel==='deepseek' ? 'rgba(56,189,248,.2)' : 'rgba(167,139,250,.2)')}"
-                 @click="switchAiModel(activeAiModel==='deepseek'?'claude-opus':'deepseek')"
-                 title="点击切换模型">
-                <i :class="activeAiModel==='deepseek' ? 'ph ph-lightning' : 'ph ph-brain'" style="font-size:12px"
-                   :style="{color: activeAiModel==='deepseek' ? '#38bdf8' : '#a78bfa'}"></i>
+                 :style="{background:`rgba(${modelAccentRgb(activeAiModel)},.06)`,
+                          border:`1px solid rgba(${modelAccentRgb(activeAiModel)},.2)`}"
+                 @click="cycleModel()"
+                 title="点击循环切换模型">
+                <i :class="modelIcon(activeAiModel)" style="font-size:12px"
+                   :style="{color: modelAccentColor(activeAiModel)}"></i>
                 <span style="font-family:'JetBrains Mono';font-size:10px;font-weight:600;letter-spacing:.04em"
-                      :style="{color: activeAiModel==='deepseek' ? '#38bdf8' : '#a78bfa'}">
-                    {{ activeAiModel==='deepseek' ? 'DeepSeek' : 'Claude Opus' }}
+                      :style="{color: modelAccentColor(activeAiModel)}">
+                    {{ aiModels.find(m=>m.key===activeAiModel)?.label || activeAiModel }}
                 </span>
             </div>
         </div>
@@ -672,10 +672,16 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:14px; h
                                 </div>
                                 <h2 style="font-family:'Noto Serif SC';font-size:26px;font-weight:700;color:#f5edd8;letter-spacing:.04em;line-height:1.2">{{ currentNode.name }}</h2>
                             </div>
-                            <button @click="generateAIText" :disabled="isGeneratingText" class="btn btn-ghost" style="flex-shrink:0;margin-top:6px">
-                                <i :class="isGeneratingText?'ph ph-circle-notch':'ph ph-magic-wand'" :style="isGeneratingText?'animation:spin 1s linear infinite':''"></i>
-                                {{ isGeneratingText ? '调查中…' : '深入调查' }}
-                            </button>
+                            <div style="display:flex;gap:8px;flex-shrink:0;margin-top:6px">
+                                <button @click="goBack" :disabled="isRollingBack || checkpointCount===0" class="btn btn-ghost" :title="checkpointCount===0?'尚无可回溯的快照':('回溯到上一个节点，剩余'+checkpointCount+'条快照')">
+                                    <i :class="isRollingBack?'ph ph-circle-notch':'ph ph-clock-counter-clockwise'" :style="isRollingBack?'animation:spin 1s linear infinite':''"></i>
+                                    {{ isRollingBack ? '回溯中…' : '时间回溯' }}
+                                </button>
+                                <button @click="generateAIText" :disabled="isGeneratingText" class="btn btn-ghost">
+                                    <i :class="isGeneratingText?'ph ph-circle-notch':'ph ph-magic-wand'" :style="isGeneratingText?'animation:spin 1s linear infinite':''"></i>
+                                    {{ isGeneratingText ? '调查中…' : '深入调查' }}
+                                </button>
+                            </div>
                         </div>
                     </template>
                     <!-- 编辑模式 -->
@@ -739,11 +745,11 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:14px; h
                         </div>
 
                         <!-- AI 扩写结果 -->
-                        <div v-if="aiGeneratedText" style="background:rgba(91,156,245,.05);border:1px solid rgba(91,156,245,.15);border-radius:8px;padding:16px 20px;margin-bottom:20px">
+                        <div v-if="aiGeneratedText[currentNode.id]" style="background:rgba(91,156,245,.05);border:1px solid rgba(91,156,245,.15);border-radius:8px;padding:16px 20px;margin-bottom:20px">
                             <div class="tag" style="color:#5b9cf5;display:flex;align-items:center;gap:6px;margin-bottom:10px">
                                 <i class="ph ph-sparkle"></i> AI 扩写细节
                             </div>
-                            <p style="font-size:15px;line-height:1.8;color:#a5b4fc">{{ aiGeneratedText }}</p>
+                            <p style="font-size:15px;line-height:1.8;color:#a5b4fc">{{ aiGeneratedText[currentNode.id] }}</p>
                         </div>
 
                         <!-- 图片生成区 -->
@@ -885,13 +891,21 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:14px; h
                         <div style="display:flex;gap:10px">
                             <div style="position:relative;flex:1">
                                 <input v-model="playerAction" @keyup.enter="()=>generateDynamicOptions()" type="text"
-                                       :placeholder="actionType==='dialogue'?'玩家说了什么…（社交对话模式）':actionType==='action'?'玩家做了什么…（物理行动模式）':'玩家尝试执行…（按回车确认）'"
+                                       :placeholder="isRecording?'正在聆听…':actionType==='dialogue'?'玩家说了什么…（社交对话模式）':actionType==='action'?'玩家做了什么…（物理行动模式）':'玩家尝试执行…（按回车确认）'"
                                        class="inp" style="flex:1;font-size:14px;padding-right:36px"
-                                       :style="{borderColor: actionType==='dialogue'?'rgba(192,132,252,.25)':actionType==='action'?'rgba(239,68,68,.25)':'rgba(232,180,75,.2)'}">
+                                       :style="{borderColor: isRecording?'rgba(239,68,68,.5)':actionType==='dialogue'?'rgba(192,132,252,.25)':actionType==='action'?'rgba(239,68,68,.25)':'rgba(232,180,75,.2)'}">
                                 <span style="position:absolute;right:10px;top:50%;transform:translateY(-50%);font-size:14px;pointer-events:none">
                                     {{ actionType==='dialogue'?'🗣️':actionType==='action'?'🏃':'🎭' }}
                                 </span>
                             </div>
+                            <button @click="toggleVoiceInput" :disabled="isGeneratingOptions"
+                                    class="btn btn-sm" title="语音输入（中文）"
+                                    style="flex-shrink:0;width:38px;padding:0;border-radius:8px;transition:all .2s"
+                                    :style="isRecording
+                                        ?{background:'rgba(239,68,68,.15)',color:'#ef4444',border:'1px solid rgba(239,68,68,.4)',animation:'mic-pulse 1.2s ease-in-out infinite'}
+                                        :{background:'rgba(255,255,255,.05)',color:'#6b7280',border:'1px solid rgba(255,255,255,.08)'}">
+                                <i :class="isRecording?'ph-fill ph-microphone':'ph ph-microphone'" style="font-size:16px"></i>
+                            </button>
                             <button @click="()=>generateDynamicOptions()" :disabled="isGeneratingOptions||!playerAction" class="btn btn-accent btn-lg" style="flex-shrink:0">
                                 <i :class="isGeneratingOptions?'ph ph-circle-notch':'ph ph-dice-three'" :style="isGeneratingOptions?'animation:spin 1s linear infinite':''"></i>
                                 {{ isGeneratingOptions ? '推演命运中…' : '执行推演' }}
@@ -1417,8 +1431,9 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:14px; h
                             <i :class="t.fired?'ph-fill ph-check-circle':'ph ph-hourglass'" :style="{color:t.fired?'#4fc98a':'#4b5563',fontSize:'15px',flexShrink:0}"></i>
                         </div>
                         <div style="font-family:'JetBrains Mono';font-size:10px;color:#6b7280;letter-spacing:.04em;display:flex;gap:10px;flex-wrap:wrap">
-                            <span v-if="t.conditions&&t.conditions.length>1" style="background:rgba(248,113,113,.08);padding:2px 4px;border-radius:2px;color:#f87171">AND ×{{ t.conditions.length }}</span>
-                            <span v-for="c in (Array.isArray(t.conditions)&&t.conditions.length?t.conditions:(t.cond_type?[{type:t.cond_type}]:[]))" :key="c.type+(c.value||'')" style="background:rgba(255,255,255,.05);padding:2px 4px;border-radius:2px">{{ {scene:'场景',item:'物品',stat:'属性',ai:'AI'}[c.type]||c.type }}</span>
+                            <span v-if="t.conditions&&t.conditions.length>1" style="padding:2px 4px;border-radius:2px;" :style="t.conditions.slice(1).every(c=>c.joinOp==='or')?{background:'rgba(232,180,75,.08)',color:'#e8b44b'}:t.conditions.slice(1).some(c=>c.joinOp==='or')?{background:'rgba(129,140,248,.08)',color:'#818cf8'}:{background:'rgba(248,113,113,.08)',color:'#f87171'}">{{ t.conditions.slice(1).every(c=>c.joinOp==='or')?'OR':t.conditions.slice(1).some(c=>c.joinOp==='or')?'混合':'AND' }} ×{{ t.conditions.length }}</span>
+                            <span v-if="t._hasGroupedConditions" style="padding:2px 4px;border-radius:2px;background:rgba(232,180,75,.08);color:#e8b44b">⚠ 分组</span>
+                            <span v-for="c in (Array.isArray(t.conditions)&&t.conditions.length?t.conditions:(t.cond_type?[{type:t.cond_type}]:[]))" :key="c.type+(c.value||'')" style="background:rgba(255,255,255,.05);padding:2px 4px;border-radius:2px">{{ c.negate?'NOT ':'' }}{{ {scene:'场景',item:'物品',stat:'属性',ai:'AI'}[c.type]||c.type }}</span>
                             <span :style="{color:t.mode==='hard'?'#f87171':'#e8b44b'}">{{ t.mode==='hard'?'强制跳':'软提示' }}</span>
                             <span>→ #{{ t.target_node_id }}</span>
                         </div>
@@ -1453,17 +1468,23 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:14px; h
                     </div>
                 </div>
                 <div>
-                    <label class="tag" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-                        <span>触发条件（全部满足才触发）</span>
-                        <button @click="if(!currentTrigger.conditions)currentTrigger.conditions=[];currentTrigger.conditions.push({type:'scene',value:''})" class="btn btn-ghost btn-sm" style="font-size:11px;padding:2px 8px"><i class="ph ph-plus"></i> 添加条件</button>
-                    </label>
+                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+                        <span class="tag">触发条件</span>
+                        <button @click="if(!currentTrigger.conditions)currentTrigger.conditions=[];currentTrigger.conditions.push({type:'scene',value:'',negate:false,joinOp:'and'})" class="btn btn-ghost btn-sm" style="font-size:11px;padding:2px 8px"><i class="ph ph-plus"></i> 添加条件</button>
+                    </div>
+                    <div v-if="currentTrigger._hasGroupedConditions" style="background:rgba(232,180,75,.07);border:1px solid rgba(232,180,75,.25);border-radius:6px;padding:8px 12px;font-size:11px;color:#e8b44b;margin-bottom:8px">
+                        ⚠ 此触发器含分组逻辑（如 (A AND B) OR (C AND D)），保存后将展开为左结合形式，语义等价但括号层次被打平。
+                    </div>
                     <div v-if="!currentTrigger.conditions||!currentTrigger.conditions.length" style="text-align:center;color:#4b5563;font-size:12px;padding:16px;border:1px dashed rgba(255,255,255,.08);border-radius:6px">
                         点击「添加条件」构建第一个触发条件
                     </div>
                     <div v-for="(cond, ci) in currentTrigger.conditions" :key="ci" style="border:1px solid rgba(255,255,255,.06);border-radius:8px;padding:12px;margin-bottom:8px;background:rgba(255,255,255,.02)">
                         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
                             <span style="font-family:'JetBrains Mono';font-size:10px;color:#4b5563;font-weight:600">条件 #{{ ci+1 }}</span>
-                            <button @click="currentTrigger.conditions.splice(ci,1)" class="btn btn-ghost btn-sm" style="padding:2px 4px;opacity:.4;font-size:12px"><i class="ph ph-x"></i></button>
+                            <div style="display:flex;align-items:center;gap:4px">
+                                <button @click="cond.negate=!cond.negate" class="btn btn-sm" style="font-size:10px;padding:1px 7px;font-family:'JetBrains Mono';font-weight:700" :style="cond.negate?{background:'rgba(129,140,248,.12)',color:'#818cf8',borderColor:'rgba(129,140,248,.4)'}:{color:'#4b5563',background:'transparent',border:'1px solid rgba(255,255,255,.06)'}">NOT</button>
+                                <button @click="currentTrigger.conditions.splice(ci,1)" class="btn btn-ghost btn-sm" style="padding:2px 4px;opacity:.4;font-size:12px"><i class="ph ph-x"></i></button>
+                            </div>
                         </div>
                         <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px">
                             <button v-for="ct in condTypes" :key="ct.value" @click="cond.type=ct.value;cond.value=''" class="cond-btn" :class="cond.type===ct.value?'active':''" style="font-size:11px;padding:6px 8px">
@@ -1482,13 +1503,46 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:14px; h
                         <template v-else>
                             <input type="text" v-model="cond.value" class="inp inp-mono" style="font-size:12px" :placeholder="cond.type==='item'?'物品关键词，如：龙鳞,水晶':'如：hp<20,san<10'">
                         </template>
-                        <div v-if="ci < currentTrigger.conditions.length - 1" style="text-align:center;margin-top:8px;font-family:'JetBrains Mono';font-size:10px;color:#f87171;font-weight:700;letter-spacing:.1em">AND</div>
+                        <div v-if="ci < currentTrigger.conditions.length - 1" style="display:flex;justify-content:center;gap:6px;margin-top:8px">
+                            <button @click="currentTrigger.conditions[ci+1].joinOp='and'" class="btn btn-sm" style="font-size:10px;padding:1px 10px;font-family:'JetBrains Mono';font-weight:700" :style="(!currentTrigger.conditions[ci+1].joinOp||currentTrigger.conditions[ci+1].joinOp==='and')?{background:'rgba(248,113,113,.12)',color:'#f87171',borderColor:'rgba(248,113,113,.4)'}:{color:'#4b5563',background:'transparent',border:'1px solid rgba(255,255,255,.08)'}">AND</button>
+                            <button @click="currentTrigger.conditions[ci+1].joinOp='or'" class="btn btn-sm" style="font-size:10px;padding:1px 10px;font-family:'JetBrains Mono';font-weight:700" :style="currentTrigger.conditions[ci+1].joinOp==='or'?{background:'rgba(232,180,75,.12)',color:'#e8b44b',borderColor:'rgba(232,180,75,.4)'}:{color:'#4b5563',background:'transparent',border:'1px solid rgba(255,255,255,.08)'}">OR</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div>
+                    <label class="tag" style="display:block;margin-bottom:6px">冷却时间（秒）</label>
+                    <div style="display:flex;align-items:center;gap:8px">
+                        <input type="number" v-model.number="currentTrigger.cooldown" min="0" step="1" class="inp" style="width:120px" placeholder="0">
+                        <span style="font-size:11px;color:#4b5563">0 = 触发一次永久封锁；>0 = 冷却后可重复触发</span>
+                    </div>
+                </div>
+                <div>
+                    <label class="tag" style="display:block;margin-bottom:6px">前驱触发器 <span style="font-weight:400;color:#4b5563">（全部已触发后本触发器才激活）</span></label>
+                    <div style="display:flex;flex-wrap:wrap;gap:4px">
+                        <label v-for="t2 in triggers.filter(t2=>t2.id!==currentTrigger.id)" :key="t2.id" style="display:flex;align-items:center;gap:4px;padding:3px 8px;border-radius:4px;border:1px solid;font-size:11px;cursor:pointer;font-family:'JetBrains Mono'" :style="(currentTrigger.prerequisite_trigger_ids||[]).includes(t2.id)?{borderColor:'rgba(79,201,138,.4)',background:'rgba(79,201,138,.06)',color:'#4fc98a'}:{borderColor:'rgba(255,255,255,.06)',background:'rgba(255,255,255,.02)',color:'#6b7280'}">
+                            <input type="checkbox" :value="t2.id" v-model="currentTrigger.prerequisite_trigger_ids" style="display:none">
+                            <i :class="(currentTrigger.prerequisite_trigger_ids||[]).includes(t2.id)?'ph-fill ph-check-square':'ph ph-square'" style="font-size:12px"></i>
+                            #{{ t2.id }} {{ t2.label||'未命名' }}
+                        </label>
+                        <span v-if="!triggers.filter(t2=>t2.id!==currentTrigger.id).length" style="font-size:11px;color:#4b5563">暂无其他触发器</span>
+                    </div>
+                </div>
+                <div>
+                    <label class="tag" style="display:block;margin-bottom:6px">互斥触发器 <span style="font-weight:400;color:#4b5563">（任一已触发则本触发器跳过）</span></label>
+                    <div style="display:flex;flex-wrap:wrap;gap:4px">
+                        <label v-for="t2 in triggers.filter(t2=>t2.id!==currentTrigger.id)" :key="t2.id" style="display:flex;align-items:center;gap:4px;padding:3px 8px;border-radius:4px;border:1px solid;font-size:11px;cursor:pointer;font-family:'JetBrains Mono'" :style="(currentTrigger.exclude_trigger_ids||[]).includes(t2.id)?{borderColor:'rgba(248,113,113,.4)',background:'rgba(248,113,113,.06)',color:'#f87171'}:{borderColor:'rgba(255,255,255,.06)',background:'rgba(255,255,255,.02)',color:'#6b7280'}">
+                            <input type="checkbox" :value="t2.id" v-model="currentTrigger.exclude_trigger_ids" style="display:none">
+                            <i :class="(currentTrigger.exclude_trigger_ids||[]).includes(t2.id)?'ph-fill ph-x-square':'ph ph-square'" style="font-size:12px"></i>
+                            #{{ t2.id }} {{ t2.label||'未命名' }}
+                        </label>
+                        <span v-if="!triggers.filter(t2=>t2.id!==currentTrigger.id).length" style="font-size:11px;color:#4b5563">暂无其他触发器</span>
                     </div>
                 </div>
 
                 <div v-if="currentTrigger.id" style="display:flex;align-items:center;justify-content:space-between;background:#090b10;border:1px solid rgba(255,255,255,.06);border-radius:6px;padding:12px 16px;margin-top:8px">
-                    <span style="font-size:13px;color:#6b7280">当前触发器状态：<b :style="{color:currentTrigger.fired?'#4fc98a':'#6b7280'}">{{ currentTrigger.fired?'已在会话中激活':'待命监测中' }}</b></span>
-                    <button v-if="currentTrigger.fired" @click="resetTriggerFired(currentTrigger.id)" class="btn btn-ghost btn-sm"><i class="ph ph-arrow-counter-clockwise"></i> 重置待命</button>
+                    <span style="font-size:13px;color:#6b7280">当前触发器状态：<b :style="{color:currentTrigger.fired?'#4fc98a':'#6b7280'}">{{ currentTrigger.fired?'已在会话中激活':'待命监测中' }}</b><span v-if="currentTrigger.fire_count>0" style="margin-left:8px;color:#4b5563">（共触发 {{ currentTrigger.fire_count }} 次）</span></b></span>
+                    <button v-if="currentTrigger.fired||currentTrigger.fire_count>0" @click="resetTriggerFired(currentTrigger.id)" class="btn btn-ghost btn-sm"><i class="ph ph-arrow-counter-clockwise"></i> 重置待命</button>
                 </div>
 
                 <div style="display:flex;justify-content:space-between;margin-top:auto;padding-top:16px;border-top:1px solid rgba(255,255,255,.06)">
@@ -2109,6 +2163,18 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:14px; h
                         </div>
                     </div>
 
+                    <!-- 切片参数 -->
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+                        <div>
+                            <label class="tag" style="display:block;margin-bottom:6px">切片大小 <span style="font-size:10px;color:#4b5563;font-weight:400;margin-left:4px">字符数</span></label>
+                            <input v-model.number="ragChunkSize" type="number" min="100" max="2000" step="50" class="inp" style="font-family:'JetBrains Mono'">
+                        </div>
+                        <div>
+                            <label class="tag" style="display:block;margin-bottom:6px">重叠长度 <span style="font-size:10px;color:#4b5563;font-weight:400;margin-left:4px">字符数</span></label>
+                            <input v-model.number="ragChunkOverlap" type="number" min="0" max="200" step="10" class="inp" style="font-family:'JetBrains Mono'">
+                        </div>
+                    </div>
+
                     <!-- 文本粘贴区 -->
                     <div style="display:flex;flex-direction:column;min-height:0">
                         <label class="tag" style="display:block;margin-bottom:6px">
@@ -2127,7 +2193,7 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:14px; h
                                 <i class="ph ph-paperclip" style="font-size:11px;margin-right:3px"></i>{{ ragUploadFile.name }}
                             </template>
                             <template v-else-if="ragForm.text.length">
-                                {{ ragForm.text.length }} 字 · 约 {{ Math.ceil(ragForm.text.length/400) }} 个切片
+                                {{ ragForm.text.length }} 字 · 约 {{ Math.ceil(ragForm.text.length/ragChunkSize) }} 个切片
                             </template>
                             <template v-else>等待文件或文本输入…</template>
                         </span>
@@ -2151,7 +2217,14 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:14px; h
                 <!-- ── 检索测试面板 ── -->
                 <div v-else-if="ragTab==='search'" style="flex:1;display:flex;flex-direction:column;overflow:hidden;padding:20px;gap:14px">
                     <div>
-                        <label class="tag" style="display:block;margin-bottom:6px">测试查询文本</label>
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+                            <label class="tag">测试查询文本</label>
+                            <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#6b7280">
+                                返回
+                                <input v-model.number="ragTopK" type="number" min="1" max="30" class="inp" style="width:52px;height:26px;padding:2px 6px;font-family:'JetBrains Mono';text-align:center;font-size:12px">
+                                条
+                            </div>
+                        </div>
                         <div style="display:flex;gap:8px">
                             <input v-model="ragSearchQuery" @keyup.enter="ragSearch" class="inp" style="flex:1" placeholder="输入场景描述或人名，查看知识库会返回哪些段落…">
                             <button @click="ragSearch" :disabled="!ragSearchQuery.trim()||ragSearching" class="btn" style="background:rgba(129,140,248,.1);border-color:rgba(129,140,248,.3);color:#818cf8;flex-shrink:0">
@@ -2686,6 +2759,7 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:14px; h
 
 <style>
 @keyframes spin { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
+@keyframes mic-pulse { 0%,100%{box-shadow:0 0 0 0 rgba(239,68,68,.5)} 50%{box-shadow:0 0 0 6px rgba(239,68,68,0)} }
 
 /* ── 时间线面板滑入动画 ── */
 .tl-slide-enter-active, .tl-slide-leave-active { transition: transform .25s cubic-bezier(.4,0,.2,1), opacity .2s; }
@@ -2735,11 +2809,40 @@ createApp({
         const showLorebookModal = ref(false);
         const lorebook = ref([]);
         const currentLore = ref({keywords:'', content:''});
-        const aiGeneratedText = ref('');
+        const aiGeneratedText = ref({});
         const playerAction = ref('');
         const actionType = ref('mixed');  // 动作经济分离：'dialogue' | 'action' | 'mixed'
         const isGeneratingText = ref(false);
+        const checkpointCount = ref(0);
+        const isRollingBack = ref(false);
         const isGeneratingOptions = ref(false);
+
+        // ── 语音输入 ──
+        const isRecording = ref(false);
+        let _speechRecognizer = null;
+        const toggleVoiceInput = () => {
+            const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+            if (!SR) { alert('当前浏览器不支持语音识别，请使用 Chrome 或 Edge。'); return; }
+            if (isRecording.value) {
+                _speechRecognizer?.stop();
+                return;
+            }
+            _speechRecognizer = new SR();
+            _speechRecognizer.lang = 'zh-CN';
+            _speechRecognizer.interimResults = true;
+            _speechRecognizer.continuous = false;
+            _speechRecognizer.onstart = () => { isRecording.value = true; };
+            _speechRecognizer.onend   = () => { isRecording.value = false; };
+            _speechRecognizer.onerror = (e) => {
+                isRecording.value = false;
+                if (e.error === 'network') alert('语音识别网络错误，请使用 Edge 浏览器或检查网络连接。');
+                else if (e.error === 'not-allowed') alert('麦克风权限被拒绝，请在浏览器设置中允许麦克风访问。');
+            };
+            _speechRecognizer.onresult = (e) => {
+                playerAction.value = Array.from(e.results).map(r => r[0].transcript).join('');
+            };
+            _speechRecognizer.start();
+        };
 
         // ── TTS 朗读 ──
         const ttsPlaying = ref(false);
@@ -3313,6 +3416,9 @@ createApp({
         // 文件上传专属状态
         const ragUploadFile    = ref(null);   // File 对象
         const ragDragOver      = ref(false);
+        const ragChunkSize     = ref(600);
+        const ragChunkOverlap  = ref(80);
+        const ragTopK          = ref(6);
 
         const fetchRagDocuments = async () => {
             try {
@@ -3363,9 +3469,11 @@ createApp({
                 if (ragUploadFile.value) {
                     // ── 文件上传路径 ──────────────────────────────
                     const fd = new FormData();
-                    fd.append('file',   ragUploadFile.value);
-                    fd.append('title',  ragForm.value.title.trim()  || ragUploadFile.value.name);
-                    fd.append('source', ragForm.value.source.trim() || ragUploadFile.value.name);
+                    fd.append('file',          ragUploadFile.value);
+                    fd.append('title',         ragForm.value.title.trim()  || ragUploadFile.value.name);
+                    fd.append('source',        ragForm.value.source.trim() || ragUploadFile.value.name);
+                    fd.append('chunk_size',    ragChunkSize.value);
+                    fd.append('chunk_overlap', ragChunkOverlap.value);
                     const r = await fetch(`${API_BASE_URL}/api/rag/upload`, {
                         method: 'POST',
                         body: fd          // 不设 Content-Type，让浏览器自动设置 multipart/form-data
@@ -3387,9 +3495,11 @@ createApp({
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
-                            title:  ragForm.value.title.trim(),
-                            source: ragForm.value.source.trim(),
-                            text:   ragForm.value.text.trim()
+                            title:         ragForm.value.title.trim(),
+                            source:        ragForm.value.source.trim(),
+                            text:          ragForm.value.text.trim(),
+                            chunk_size:    ragChunkSize.value,
+                            chunk_overlap: ragChunkOverlap.value,
                         })
                     });
                     d = await r.json();
@@ -3435,23 +3545,80 @@ createApp({
                 const r = await fetch(`${API_BASE_URL}/api/rag/search`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ scene_name: ragSearchQuery.value, content: '' })
+                    body: JSON.stringify({ scene_name: ragSearchQuery.value, content: '', top_k: ragTopK.value })
                 });
                 const d = await r.json();
                 ragSearchResults.value = d.results || [];
             } catch(e) {}
             finally { ragSearching.value = false; }
         };
-        const fetchTriggers = async () => { try { const r = await fetch(`${API_BASE_URL}/api/game/triggers`); triggers.value=(await r.json()).triggers||[]; } catch(e){} };
+        // 将后端树结构拍平为带 joinOp 的条件列表（左结合展开）
+        const _flattenTree = (node, depth = 0) => {
+            if (!node) return [];
+            if (node.op === 'not') {
+                const inner = node.children && node.children[0];
+                if (!inner) return [];
+                if (inner.op) {
+                    const sub = _flattenTree(inner, depth);
+                    if (sub.length) sub[0].negate = !sub[0].negate;
+                    return sub;
+                }
+                return [{ type: inner.type||'', value: inner.value||'', negate: true }];
+            }
+            if (node.op === 'and' || node.op === 'or') {
+                const result = [];
+                let hasGroupedChild = false;
+                (node.children || []).forEach((child, i) => {
+                    if (child.op === 'and' || child.op === 'or') hasGroupedChild = true;
+                    const sub = _flattenTree(child, depth + 1);
+                    if (i > 0 && sub.length > 0) sub[0].joinOp = node.op;
+                    result.push(...sub);
+                });
+                if (hasGroupedChild && result.length) result[0]._groupingLost = true;
+                return result;
+            }
+            // 叶节点
+            return [{ type: node.type||'', value: node.value||'', negate: false }];
+        };
+        // 将带 joinOp 的条件列表构建为左结合树（发给后端）
+        const _buildTree = (conditions) => {
+            const valid = conditions.filter(c => c.type && c.value);
+            if (!valid.length) return { op: 'and', children: [] };
+            const toNode = c => {
+                const leaf = { type: c.type, value: c.value };
+                return c.negate ? { op: 'not', children: [leaf] } : leaf;
+            };
+            let tree = toNode(valid[0]);
+            for (let i = 1; i < valid.length; i++)
+                tree = { op: valid[i].joinOp || 'and', children: [tree, toNode(valid[i])] };
+            return tree;
+        };
+        const fetchTriggers = async () => {
+            try {
+                const r = await fetch(`${API_BASE_URL}/api/game/triggers`);
+                const data = await r.json();
+                triggers.value = (data.triggers || []).map(t => {
+                    if (t.conditions && !Array.isArray(t.conditions) && Array.isArray(t.conditions.children)) {
+                        t.conditions = _flattenTree(t.conditions);
+                        t._hasGroupedConditions = t.conditions.some(c => c._groupingLost);
+                    } else {
+                        if (!Array.isArray(t.conditions)) t.conditions = [];
+                        t.conditions = t.conditions.map(c => ({ ...c, negate: c.negate||false }));
+                        t._hasGroupedConditions = false;
+                    }
+                    return t;
+                });
+            } catch(e) {}
+        };
         const openTriggerModal = () => { fetchTriggers(); showTriggerModal.value=true; };
-        const newTrigger = () => { currentTrigger.value={label:'',target_node_id:'',mode:'soft',conditions:[{type:'scene',value:''}],fired:0}; };
-        const selectTrigger = t => { const copy=JSON.parse(JSON.stringify(t)); if(!Array.isArray(copy.conditions)||!copy.conditions.length){if(copy.cond_type)copy.conditions=[{type:copy.cond_type,value:copy.cond_value||''}];else copy.conditions=[];} currentTrigger.value=copy; };
+        const newTrigger = () => { currentTrigger.value={label:'',target_node_id:'',mode:'soft',conditions:[{type:'scene',value:'',negate:false}],fired:0,fire_count:0,cooldown:0,prerequisite_trigger_ids:[],exclude_trigger_ids:[]}; };
+        const selectTrigger = t => { const copy=JSON.parse(JSON.stringify(t)); if(!Array.isArray(copy.conditions)||!copy.conditions.length){if(copy.cond_type)copy.conditions=[{type:copy.cond_type,value:copy.cond_value||'',negate:false}];else copy.conditions=[];} currentTrigger.value=copy; };
         const saveTrigger = async () => {
-            const t=currentTrigger.value;
-            if(!t.target_node_id || !t.conditions || !t.conditions.some(c=>c.value)) return;
-            const isNew=!t.id;
-            const url=isNew?`${API_BASE_URL}/api/game/trigger`:`${API_BASE_URL}/api/game/trigger/${t.id}`;
-            const payload={label:t.label||'触发器',target_node_id:parseInt(t.target_node_id),mode:t.mode,conditions:t.conditions.filter(c=>c.type&&c.value)};
+            const t = currentTrigger.value;
+            if (!t.target_node_id || !t.conditions || !t.conditions.some(c => c.value)) return;
+            const isNew = !t.id;
+            const url = isNew ? `${API_BASE_URL}/api/game/trigger` : `${API_BASE_URL}/api/game/trigger/${t.id}`;
+            const payload = { label: t.label||'触发器', target_node_id: parseInt(t.target_node_id), mode: t.mode, conditions: _buildTree(t.conditions), cooldown: t.cooldown||0, prerequisite_trigger_ids: t.prerequisite_trigger_ids||[], exclude_trigger_ids: t.exclude_trigger_ids||[] };
             try { const r=await fetch(url,{method:isNew?'POST':'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
                 if(r.ok){await fetchTriggers();currentTrigger.value=null;} } catch(e){}
         };
@@ -3485,6 +3652,15 @@ createApp({
                     alert(d.message || '切换失败');
                 }
             } catch(e) { alert('切换模型失败，请检查后端是否运行'); }
+        };
+        const modelAccentColor = (key) => key==='claude-opus' ? '#a78bfa' : key==='deepseek-pro' ? '#f59e0b' : '#38bdf8';
+        const modelAccentRgb   = (key) => key==='claude-opus' ? '167,139,250' : key==='deepseek-pro' ? '245,158,11' : '56,189,248';
+        const modelIcon        = (key) => key==='claude-opus' ? 'ph ph-brain' : key==='deepseek-pro' ? 'ph ph-star' : 'ph ph-lightning';
+        const cycleModel = () => {
+            const available = aiModels.value.filter(m => m.available).map(m => m.key);
+            if (!available.length) return;
+            const idx = available.indexOf(activeAiModel.value);
+            switchAiModel(available[(idx + 1) % available.length]);
         };
         const loadAndStart = async () => { if(!selectedCampaign.value)return; isLoading.value=true; isExpandingBranch.value=false; expandingBranchText.value=''; try { const r=await fetch(`${API_BASE_URL}/api/game/load`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({filename:selectedCampaign.value})}); if(r.ok){await fetchGameState();appState.value='game';} } catch(e){} finally{isLoading.value=false;} };
         const enterCurrentGame = async () => { await fetchGameState(); appState.value='game'; };
@@ -3582,7 +3758,20 @@ createApp({
             const next=storyNodes.value.find(n=>n.id===nodeId); if(!next)return;
             const prevNode = currentNode.value; // 保存父场景引用
             const isNew=!prevNode||prevNode.id!==next.id;
-            currentNode.value=next; aiGeneratedText.value=''; generatedImageUrl.value=''; syncEditData();
+
+            // 【时间回溯】：副作用执行前保存快照，失败静默忽略，绝不阻断正常推演
+            if (optionText && isNew && prevNode && !isEditMode.value) {
+                try {
+                    await fetch(`${API_BASE_URL}/api/game/checkpoint`, {
+                        method: 'POST',
+                        headers: {'Content-Type':'application/json'},
+                        body: JSON.stringify({from_node_id: prevNode.id})
+                    });
+                    checkpointCount.value++;
+                } catch(_) {}
+            }
+
+            currentNode.value=next; generatedImageUrl.value=''; syncEditData();
             optionLikelihoods.value = {}; // 跳转后清空概率（只对当前推演结果有效）
             if(!isNew||isEditMode.value)return;
 
@@ -3816,8 +4005,25 @@ createApp({
         };
         const generateNPC=async()=>{if(!currentNode.value)return;isGeneratingNPC.value=true;try{const r=await fetch(`${API_BASE_URL}/api/ai/generate-npc`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scene_name:currentNode.value.name,scene_content:currentNode.value.content,player_action:playerAction.value||'Explore'})});const d=await r.json();if(d.status==='success'){await fetchGameState();showNpcToast(d.npc);}}catch(e){}finally{isGeneratingNPC.value=false;}};
 
+        // ── 时间回溯 ──
+        const goBack = async () => {
+            if (checkpointCount.value === 0 || isRollingBack.value) return;
+            isRollingBack.value = true;
+            try {
+                const r = await fetch(`${API_BASE_URL}/api/game/rollback`, {method:'POST'});
+                const d = await r.json();
+                if (d.status === 'success') {
+                    checkpointCount.value = d.remaining ?? Math.max(0, checkpointCount.value - 1);
+                    await Promise.all([fetchGameState(), fetchMapData()]);
+                    const node = storyNodes.value.find(n => n.id === d.restored_node_id);
+                    if (node) { currentNode.value = node; generatedImageUrl.value = ''; syncEditData(); }
+                }
+            } catch(_) {}
+            finally { isRollingBack.value = false; }
+        };
+
         // ── AI ──
-        const generateAIText=async()=>{if(!currentNode.value)return;isGeneratingText.value=true;try{const r=await fetch(`${API_BASE_URL}/api/ai/expand-text`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scene_name:currentNode.value.name||'',content:currentNode.value.content||''})});const data=await r.json();aiGeneratedText.value=data.generated_text;if(currentNode.value&&data.generated_text){fetch(`${API_BASE_URL}/api/player/state`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({current_scene_id:currentNode.value.id,scene_image:generatedImageUrl.value||'',scene_prompt:imgPromptUsed.value||'',scene_ai_text:data.generated_text||'',bgm_url:currentTrackUrl.value||'',bgm_name:(tracks.value.find(t=>t.id===currentTrackId.value)||{}).name||''})}).catch(()=>{});}}catch(e){}finally{isGeneratingText.value=false;}};
+        const generateAIText=async()=>{if(!currentNode.value)return;const _nodeId=currentNode.value.id;isGeneratingText.value=true;try{const r=await fetch(`${API_BASE_URL}/api/ai/expand-text`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scene_name:currentNode.value.name||'',content:currentNode.value.content||''})});const data=await r.json();if(data.generated_text){aiGeneratedText.value={...aiGeneratedText.value,[_nodeId]:data.generated_text};}if(data.generated_text){fetch(`${API_BASE_URL}/api/player/state`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({current_scene_id:_nodeId,scene_image:generatedImageUrl.value||'',scene_prompt:imgPromptUsed.value||'',scene_ai_text:data.generated_text||'',bgm_url:currentTrackUrl.value||'',bgm_name:(tracks.value.find(t=>t.id===currentTrackId.value)||{}).name||''})}).catch(()=>{});}}catch(e){}finally{isGeneratingText.value=false;}};
         const generateDynamicOptions=async(correctionText='')=>{
             if(!currentNode.value||((!playerAction.value)&&!correctionText&&!lastDynamicContext.value))return;
             isGeneratingOptions.value=true;
@@ -3887,7 +4093,9 @@ createApp({
             isLoadingImg.value = true; 
             imgLoadError.value = false; 
             generatedImageUrl.value = '';
-            const desc = imgPrompt.value.trim() || currentNode.value.name + ' ' + (currentNode.value.expanded_content || currentNode.value.content).slice(0, 100);
+            const _aiText = aiGeneratedText.value[currentNode.value.id] || '';
+            const _sceneText = currentNode.value.expanded_content || currentNode.value.content || '';
+            const desc = imgPrompt.value.trim() || (currentNode.value.name + ' ' + _sceneText + (_aiText ? '\n' + _aiText : ''));
             try {
                 const r = await fetch(`${API_BASE_URL}/api/ai/generate-image`, {
                     method: 'POST',
@@ -4507,8 +4715,8 @@ createApp({
         return {
             appState, isLoading, dbConnected, campaignFiles, selectedCampaign,
             // AI 模型
-            aiModels, activeAiModel, fetchAiModels, switchAiModel,
-            storyNodes, characters, currentNode, isEditMode, hpLabel, sanLabel, editData, newOptionText, newOptionTarget, showWorldviewModal, worldviewContent, showMemoryModal, memoryContent, showLorebookModal, lorebook, currentLore, aiGeneratedText, playerAction, actionType, isGeneratingText, isGeneratingOptions, ttsPlaying, ttsVoice, ttsTone, ttsRate, ttsSpeak, imgPrompt, imgStyle, imgModel, isGeneratingImage, isLoadingImg, generatedImageUrl, imgEnPrompt, imgPromptUsed, imgLoadError, audioRef, tracks, currentTrackId, currentTrackUrl, customTrackUrl, isPlaying, volume, narrativeMood, timeSkipInput, forceNarrativeThrust, optionLikelihoods, fateSpinning, fateHighlightIdx, showTriggerModal, triggers, currentTrigger, condTypes, showCharModal, isGeneratingNPC, isExpandingBranch, expandingBranchText, newChar, npcToast, triggerAlert, statChangesLog, showStatChanges, showBattleReportModal, battleReport, isGeneratingReport, battleReportFilename, leftTab, treeContainerRef, treeLayout,
+            aiModels, activeAiModel, fetchAiModels, switchAiModel, modelAccentColor, modelAccentRgb, modelIcon, cycleModel,
+            storyNodes, characters, currentNode, isEditMode, hpLabel, sanLabel, editData, newOptionText, newOptionTarget, showWorldviewModal, worldviewContent, showMemoryModal, memoryContent, showLorebookModal, lorebook, currentLore, aiGeneratedText, playerAction, actionType, isGeneratingText, checkpointCount, isRollingBack, goBack, isGeneratingOptions, isRecording, toggleVoiceInput, ttsPlaying, ttsVoice, ttsTone, ttsRate, ttsSpeak, imgPrompt, imgStyle, imgModel, isGeneratingImage, isLoadingImg, generatedImageUrl, imgEnPrompt, imgPromptUsed, imgLoadError, audioRef, tracks, currentTrackId, currentTrackUrl, customTrackUrl, isPlaying, volume, narrativeMood, timeSkipInput, forceNarrativeThrust, optionLikelihoods, fateSpinning, fateHighlightIdx, showTriggerModal, triggers, currentTrigger, condTypes, showCharModal, isGeneratingNPC, isExpandingBranch, expandingBranchText, newChar, npcToast, triggerAlert, statChangesLog, showStatChanges, showBattleReportModal, battleReport, isGeneratingReport, battleReportFilename, leftTab, treeContainerRef, treeLayout,
             // 时间线系统
             timelinePanelOpen, timelines, showTlEditModal, tlEditData, tlColorPresets,
             showTlMemoryModal, tlMemoryTarget, tlMemoryContent,
@@ -4522,7 +4730,7 @@ createApp({
             // RAG 知识库
             showRagModal, ragTab, ragDocuments, ragSelectedDoc, ragForm,
             ragIngesting, ragIngestResult, ragSearchQuery, ragSearching, ragSearchResults,
-            ragUploadFile, ragDragOver,
+            ragUploadFile, ragDragOver, ragChunkSize, ragChunkOverlap, ragTopK,
             openRagModal, ragImport, ragIngest, ragDeleteDoc, ragSearch,
             ragHandleFileSelect, ragHandleDrop,
             fetchCampaigns, loadAndStart, enterCurrentGame: enterCurrentGameWithTl, exportSave, fetchGameState, jumpToNode, saveNodeChanges, createNewNode, deleteCurrentNode, addManualOption, deleteOption, saveStatLabels, saveCharacterState, createCharacter, deleteCharacter, generateNPC, resetNewChar, openWorldviewModal, saveWorldview, openMemoryModal, saveMemory, openLorebookModal, saveLore, deleteLore, fetchTriggers, openTriggerModal, newTrigger, selectTrigger, saveTrigger, deleteTrigger, resetTriggerFired, generateAIText, generateDynamicOptions, openBattleReportModal, generateBattleReport, downloadBattleReport, generateImage, togglePlay, changeTrack, doTimeSkip, doForceThrust, fatePick,

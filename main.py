@@ -342,6 +342,14 @@ def init_db():
     try: cursor.execute("ALTER TABLE nodes ADD COLUMN expanded_content TEXT DEFAULT ''")
     except sqlite3.OperationalError: pass
 
+    # 【时间回溯】：游戏状态快照表，保留最近10条
+    cursor.execute('''CREATE TABLE IF NOT EXISTS game_checkpoints (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        from_node_id INTEGER NOT NULL,
+        snapshot     TEXT    NOT NULL,
+        created_at   TEXT    NOT NULL DEFAULT (datetime('now','localtime'))
+    )''')
+
     # 初始化本地剧情记忆流字段
     cursor.execute("INSERT OR IGNORE INTO system_state (key, value) VALUES ('session_memory', '【跑团记忆日志已初始化】\n')")
     # 投屏端同步状态
@@ -1254,7 +1262,7 @@ def generate_npc(request: AutoNPCRequest):
 
     try:
         response = client.chat.completions.create(
-            model="deepseek-chat",
+            model="deepseek-v4-flash",
             messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
             temperature=0.9,
             max_tokens=300,
@@ -1323,7 +1331,7 @@ def check_npc_on_enter(request: CheckNPCRequest):
 
     try:
         response = client.chat.completions.create(
-            model="deepseek-chat",
+            model="deepseek-v4-flash",
             messages=[{"role": "system", "content": system_prompt},
                       {"role": "user",   "content": user_prompt}],
             temperature=0.7,
@@ -1460,7 +1468,7 @@ def generate_image(request: ImageGenRequest):
 
         try:
             resp = client.chat.completions.create(
-                model="deepseek-chat",
+                model="deepseek-v4-flash",
                 messages=[
                     {"role": "system", "content": (
                         "你是一个专业的 AI 视觉提示词工程师。\n"
@@ -1609,7 +1617,7 @@ def export_battle_report():
 
     try:
         resp = client.chat.completions.create(
-            model="deepseek-chat",
+            model="deepseek-v4-flash",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user",   "content": f"以下是今晚的跑团记录，请润色：{memory}"}
@@ -1867,6 +1875,128 @@ class PlayerStateRequest(BaseModel):
     scene_ai_text:    str = ""
     bgm_url:          str = ""
     bgm_name:         str = ""
+
+class CheckpointRequest(BaseModel):
+    from_node_id: int
+
+@app.post("/api/game/checkpoint")
+def create_checkpoint(req: CheckpointRequest):
+    """选项跳转前保存当前游戏状态快照（仅快照跳转时会变动的9张表）。"""
+    with safe_db() as conn:
+        def rows(sql, *args):
+            return [dict(r) for r in conn.execute(sql, args).fetchall()]
+
+        snap = {
+            "characters":     rows("SELECT * FROM characters"),
+            "world_entities": rows("SELECT * FROM world_entities"),
+            "memory_l1_max_id": (conn.execute("SELECT COALESCE(MAX(id),0) FROM memory_l1").fetchone()[0]),
+            "timelines":      rows("SELECT * FROM timelines"),
+            "node_expanded":  {str(r["id"]): r["expanded_content"]
+                               for r in conn.execute("SELECT id,expanded_content FROM nodes").fetchall()},
+            "triggers":       rows("SELECT id,fired,fire_count,last_fired_at FROM triggers"),
+            "pending_effects": rows("SELECT * FROM pending_effects"),
+            "session_memory": (conn.execute("SELECT value FROM system_state WHERE key='session_memory'").fetchone() or {"value":""})["value"],
+            "map_rooms_state": {str(r["id"]): r["state"]
+                                for r in conn.execute("SELECT id,state FROM map_rooms").fetchall()},
+        }
+
+        conn.execute(
+            "INSERT INTO game_checkpoints (from_node_id, snapshot) VALUES (?,?)",
+            (req.from_node_id, json.dumps(snap, ensure_ascii=False))
+        )
+        # 保留最近10条，自动淘汰最旧的
+        conn.execute("""
+            DELETE FROM game_checkpoints
+            WHERE id NOT IN (SELECT id FROM game_checkpoints ORDER BY id DESC LIMIT 10)
+        """)
+        conn.commit()
+    return {"status": "success"}
+
+
+@app.post("/api/game/rollback")
+def rollback_checkpoint():
+    """恢复最近一次快照，返回应导航到的节点ID。快照消费后自动删除。"""
+    with safe_db() as conn:
+        row = conn.execute(
+            "SELECT id, from_node_id, snapshot FROM game_checkpoints ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        if not row:
+            return {"status": "error", "message": "没有可用的快照"}
+
+        cp_id       = row["id"]
+        from_node   = row["from_node_id"]
+        snap        = json.loads(row["snapshot"])
+
+        # ── characters ──────────────────────────────────────────
+        conn.execute("DELETE FROM characters")
+        for c in snap["characters"]:
+            conn.execute(
+                "INSERT INTO characters (id,name,role,hp,san,inventory,status) VALUES (?,?,?,?,?,?,?)",
+                (c["id"], c["name"], c["role"], c["hp"], c["san"],
+                 c.get("inventory",""), c.get("status","active"))
+            )
+
+        # ── world_entities ───────────────────────────────────────
+        conn.execute("DELETE FROM world_entities")
+        for e in snap["world_entities"]:
+            conn.execute(
+                "INSERT INTO world_entities (id,entity_type,name,location,status,last_seen_by,state_desc,updated_at,room_id) VALUES (?,?,?,?,?,?,?,?,?)",
+                (e["id"], e["entity_type"], e["name"], e["location"],
+                 e["status"], e["last_seen_by"], e["state_desc"],
+                 e["updated_at"], e.get("room_id"))
+            )
+
+        # ── memory_l1（删除快照之后新增的条目）──────────────────
+        conn.execute("DELETE FROM memory_l1 WHERE id > ?", (snap["memory_l1_max_id"],))
+
+        # ── timelines ────────────────────────────────────────────
+        conn.execute("DELETE FROM timelines")
+        for tl in snap["timelines"]:
+            conn.execute(
+                "INSERT INTO timelines (id,label,color,current_node_id,current_room_id,memory,char_ids,status,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                (tl["id"], tl["label"], tl["color"],
+                 tl["current_node_id"], tl.get("current_room_id"),
+                 tl["memory"], tl["char_ids"], tl["status"], tl["created_at"])
+            )
+
+        # ── nodes.expanded_content ───────────────────────────────
+        for node_id_str, content in snap["node_expanded"].items():
+            conn.execute("UPDATE nodes SET expanded_content=? WHERE id=?",
+                         (content, int(node_id_str)))
+
+        # ── triggers 状态字段 ─────────────────────────────────────
+        for tr in snap["triggers"]:
+            conn.execute(
+                "UPDATE triggers SET fired=?,fire_count=?,last_fired_at=? WHERE id=?",
+                (tr["fired"], tr.get("fire_count",0), tr.get("last_fired_at"), tr["id"])
+            )
+
+        # ── pending_effects ──────────────────────────────────────
+        conn.execute("DELETE FROM pending_effects")
+        for pe in snap["pending_effects"]:
+            conn.execute(
+                "INSERT INTO pending_effects (id,node_id,payload,created_at) VALUES (?,?,?,?)",
+                (pe["id"], pe["node_id"], pe["payload"], pe["created_at"])
+            )
+
+        # ── session_memory ───────────────────────────────────────
+        conn.execute(
+            "INSERT OR REPLACE INTO system_state (key,value) VALUES ('session_memory',?)",
+            (snap["session_memory"],)
+        )
+
+        # ── map_rooms.state ──────────────────────────────────────
+        for room_id_str, state in snap["map_rooms_state"].items():
+            conn.execute("UPDATE map_rooms SET state=? WHERE id=?",
+                         (state, int(room_id_str)))
+
+        # 快照消费后删除
+        conn.execute("DELETE FROM game_checkpoints WHERE id=?", (cp_id,))
+        # 返回剩余快照数量，供前端更新按钮状态
+        remaining = conn.execute("SELECT COUNT(*) FROM game_checkpoints").fetchone()[0]
+        conn.commit()
+
+    return {"status": "success", "restored_node_id": from_node, "remaining": remaining}
 
 @app.get("/api/player/state")
 def get_player_state():

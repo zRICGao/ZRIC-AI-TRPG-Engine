@@ -33,7 +33,7 @@ _db_file: str = ""
 _embed_client = None  # OpenAI-compatible embedding client
 
 # RAG 参数
-RAG_CHUNK_SIZE    = 400
+RAG_CHUNK_SIZE    = 600
 RAG_CHUNK_OVERLAP = 80
 RAG_TOP_K         = 6
 
@@ -89,14 +89,17 @@ def init_rag_tables():
 # Pydantic 模型
 # ---------------------------------------------------------
 class RagIngestRequest(BaseModel):
-    title:  str
-    source: str = ""
-    text:   str
+    title:        str
+    source:       str = ""
+    text:         str
+    chunk_size:   int = RAG_CHUNK_SIZE
+    chunk_overlap: int = RAG_CHUNK_OVERLAP
 
 
 class RagSearchRequest(BaseModel):
     scene_name: str
-    content: str
+    content:    str
+    top_k:      int = 0  # 0 = 使用默认值 RAG_TOP_K*2
 
 
 # ---------------------------------------------------------
@@ -104,7 +107,7 @@ class RagSearchRequest(BaseModel):
 # ---------------------------------------------------------
 import re
 
-def chunk_text(text: str, max_size: int = 600) -> list[str]:
+def chunk_text(text: str, max_size: int = 600, overlap: int = 0) -> list[str]:
     """
     语义切分：
     1. 优先按双换行符（\n\n）切分自然段落    ##注释掉
@@ -142,6 +145,13 @@ def chunk_text(text: str, max_size: int = 600) -> list[str]:
                     current = s
             if current:
                 chunks.append(current.strip())
+
+    if overlap > 0 and len(chunks) > 1:
+        overlapped = [chunks[0]]
+        for i in range(1, len(chunks)):
+            tail = chunks[i - 1][-overlap:]
+            overlapped.append(tail + chunks[i])
+        chunks = overlapped
 
     return chunks
 
@@ -498,7 +508,7 @@ def rag_ingest(req: RagIngestRequest):
     """导入文档：切片 → embedding → 写入数据库。带 rate-limit 保护。"""
     t0 = time.time()
 
-    chunks = chunk_text(req.text)
+    chunks = chunk_text(req.text, max_size=req.chunk_size, overlap=req.chunk_overlap)
     if not chunks:
         return {"status": "error", "message": "文本为空，无法切片"}
 
@@ -537,9 +547,11 @@ def rag_ingest(req: RagIngestRequest):
 
 @rag_router.post("/api/rag/upload")
 async def rag_upload(
-    file:   UploadFile = File(...),
-    title:  str        = Form(""),
-    source: str        = Form(""),
+    file:          UploadFile = File(...),
+    title:         str        = Form(""),
+    source:        str        = Form(""),
+    chunk_size:    int        = Form(RAG_CHUNK_SIZE),
+    chunk_overlap: int        = Form(RAG_CHUNK_OVERLAP),
 ):
     """上传 .txt / .pdf 文件并导入知识库。"""
     t0 = time.time()
@@ -574,7 +586,7 @@ async def rag_upload(
     doc_title  = (title.strip()  or filename)[:100]
     doc_source = (source.strip() or filename)[:200]
 
-    chunks = chunk_text(text)
+    chunks = chunk_text(text, max_size=chunk_size, overlap=chunk_overlap)
     if not chunks:
         return {"status": "error", "message": "文本切片失败"}
 
@@ -626,6 +638,7 @@ def rag_search(req: RagSearchRequest):
     """独立检索接口，供前端测试知识库效果。使用混合检索。"""
     query = f"{req.scene_name} {req.content}"
     conn = get_db_connection()
-    results = _hybrid_retrieve(conn, query, top_k=RAG_TOP_K * 2, vec_threshold=0.0)
+    effective_top_k = req.top_k if req.top_k > 0 else RAG_TOP_K * 2
+    results = _hybrid_retrieve(conn, query, top_k=effective_top_k, vec_threshold=0.0)
     conn.close()
     return {"status": "success", "results": results}

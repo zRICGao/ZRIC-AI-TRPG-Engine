@@ -95,8 +95,9 @@ _refresh_vector_cache = None    # rag.refresh_vector_cache
 
 # 当前激活的模型（服务器级默认值，可被请求级参数覆盖）
 AVAILABLE_MODELS = {
-    "deepseek": {"label": "DeepSeek Chat", "model_id": "deepseek-chat"},
-    "claude-opus": {"label": "Claude Opus 4.6", "model_id": "claude-opus-4-6"},
+    "deepseek":     {"label": "DeepSeek V4 Flash", "model_id": "deepseek-v4-flash"},
+    "deepseek-pro": {"label": "DeepSeek V4 Pro",   "model_id": "deepseek-v4-pro"},
+    "claude-opus":  {"label": "Claude Opus 4.6",   "model_id": "claude-opus-4-6"},
 }
 _active_model: str = "deepseek"  # 服务器默认模型
 
@@ -197,7 +198,7 @@ def safe_db():
 # 模型切换 API
 # ---------------------------------------------------------
 class ModelSwitchRequest(BaseModel):
-    model: str  # "deepseek" | "claude-opus"
+    model: str  # "deepseek" | "deepseek-pro" | "claude-opus"
 
 @agent_router.get("/api/ai/models")
 def list_models():
@@ -241,18 +242,20 @@ def _call_ai(system_prompt: str, user_prompt: str,
     if model == "claude-opus" and _anthropic_client:
         return _call_claude(system_prompt, user_prompt, temperature, max_tokens)
     else:
-        return _call_deepseek(system_prompt, user_prompt, temperature, max_tokens, json_mode)
+        model_id = AVAILABLE_MODELS.get(model, AVAILABLE_MODELS["deepseek"])["model_id"]
+        return _call_deepseek(system_prompt, user_prompt, temperature, max_tokens, json_mode, model_id)
 
 
 def _call_deepseek(system_prompt: str, user_prompt: str,
                    temperature: float, max_tokens: int,
-                   json_mode: bool = True) -> str:
-    """调用 DeepSeek Chat API。"""
+                   json_mode: bool = True,
+                   model_id: str = "deepseek-v4-flash") -> str:
+    """调用 DeepSeek API。"""
     if not _deepseek_client:
         raise RuntimeError("DeepSeek client 未初始化。请检查 API Key 配置和 configure_agent 是否已执行。")
 
     kwargs = {
-        "model": "deepseek-chat",
+        "model": model_id,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
@@ -323,9 +326,10 @@ def _stream_ai_sse(system_prompt: str, user_prompt: str,
             yield f"data: {json.dumps({'type': 'error', 'content': str(e)}, ensure_ascii=False)}\n\n"
     else:
         # DeepSeek 流式
+        model_id = AVAILABLE_MODELS.get(model, AVAILABLE_MODELS["deepseek"])["model_id"]
         try:
             response = _deepseek_client.chat.completions.create(
-                model="deepseek-chat",
+                model=model_id,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
