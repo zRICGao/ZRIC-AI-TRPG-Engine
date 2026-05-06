@@ -71,8 +71,15 @@ def init_rag_tables():
         title      TEXT NOT NULL,
         source     TEXT NOT NULL DEFAULT '',
         chunk_size INTEGER NOT NULL DEFAULT 0,
+        hidden     INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
     )''')
+    # 迁移：为旧数据库添加 hidden 列
+    try:
+        cursor.execute("ALTER TABLE rag_documents ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0")
+        conn.commit()
+    except Exception:
+        pass
     cursor.execute('''CREATE TABLE IF NOT EXISTS rag_chunks (
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
         doc_id      INTEGER NOT NULL,
@@ -94,6 +101,7 @@ class RagIngestRequest(BaseModel):
     text:         str
     chunk_size:   int = RAG_CHUNK_SIZE
     chunk_overlap: int = RAG_CHUNK_OVERLAP
+    hidden:       int = 0
 
 
 class RagSearchRequest(BaseModel):
@@ -244,6 +252,7 @@ class _VectorCache:
             rows = conn.execute(
                 "SELECT c.id, c.chunk_text, c.embedding, c.chunk_index, c.doc_id, d.title "
                 "FROM rag_chunks c JOIN rag_documents d ON c.doc_id = d.id "
+                "WHERE d.hidden=0 "
                 "ORDER BY c.id"
             ).fetchall()
             conn.close()
@@ -405,7 +414,7 @@ def _hybrid_retrieve(conn, query_text: str, top_k: int = RAG_TOP_K,
                 rows = conn.execute(
                     "SELECT c.chunk_text, c.chunk_index, c.doc_id, d.title "
                     "FROM rag_chunks c JOIN rag_documents d ON c.doc_id = d.id "
-                    "WHERE c.chunk_text LIKE ? LIMIT 2",
+                    "WHERE d.hidden=0 AND c.chunk_text LIKE ? LIMIT 2",
                     (f"%{kw}%",)
                 ).fetchall()
                 for r in rows:
@@ -447,7 +456,8 @@ def _hybrid_retrieve(conn, query_text: str, top_k: int = RAG_TOP_K,
                 # 缓存未就绪：数据库全表扫描
                 rows = conn.execute(
                     "SELECT c.id, c.chunk_text, c.embedding, c.chunk_index, c.doc_id, d.title "
-                    "FROM rag_chunks c JOIN rag_documents d ON c.doc_id = d.id"
+                    "FROM rag_chunks c JOIN rag_documents d ON c.doc_id = d.id "
+                    "WHERE d.hidden=0"
                 ).fetchall()
                 scored = []
                 for row in rows:
@@ -514,8 +524,8 @@ def rag_ingest(req: RagIngestRequest):
 
     conn = get_db_connection()
     cur = conn.execute(
-        "INSERT INTO rag_documents (title, source, chunk_size) VALUES (?,?,?)",
-        (req.title[:100], req.source[:200], len(chunks))
+        "INSERT INTO rag_documents (title, source, chunk_size, hidden) VALUES (?,?,?,?)",
+        (req.title[:100], req.source[:200], len(chunks), 1 if req.hidden else 0)
     )
     doc_id = cur.lastrowid
 
@@ -552,6 +562,7 @@ async def rag_upload(
     source:        str        = Form(""),
     chunk_size:    int        = Form(RAG_CHUNK_SIZE),
     chunk_overlap: int        = Form(RAG_CHUNK_OVERLAP),
+    hidden:        int        = Form(0),
 ):
     """上传 .txt / .pdf 文件并导入知识库。"""
     t0 = time.time()
@@ -592,8 +603,8 @@ async def rag_upload(
 
     conn = get_db_connection()
     cur = conn.execute(
-        "INSERT INTO rag_documents (title, source, chunk_size) VALUES (?,?,?)",
-        (doc_title, doc_source, len(chunks))
+        "INSERT INTO rag_documents (title, source, chunk_size, hidden) VALUES (?,?,?,?)",
+        (doc_title, doc_source, len(chunks), 1 if hidden else 0)
     )
     doc_id = cur.lastrowid
 
@@ -631,6 +642,16 @@ def rag_delete_document(doc_id: int):
     # 删除后刷新缓存
     refresh_vector_cache()
     return {"status": "success"}
+
+
+@rag_router.patch("/api/rag/documents/{doc_id}/hidden")
+def rag_toggle_hidden(doc_id: int, hidden: int):
+    """设置文档的隐藏状态（hidden=0 公开，hidden=1 隐藏）。"""
+    conn = get_db_connection()
+    conn.execute("UPDATE rag_documents SET hidden=? WHERE id=?", (1 if hidden else 0, doc_id))
+    conn.commit(); conn.close()
+    refresh_vector_cache()
+    return {"status": "success", "doc_id": doc_id, "hidden": hidden}
 
 
 @rag_router.post("/api/rag/search")

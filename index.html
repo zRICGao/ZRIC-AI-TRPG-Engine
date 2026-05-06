@@ -1442,7 +1442,10 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:14px; h
     <div class="modal-box" style="width:860px;height:82vh">
         <div style="padding:20px 24px;border-bottom:1px solid rgba(255,255,255,.06);display:flex;justify-content:space-between;align-items:center;flex-shrink:0">
             <div class="tag" style="color:#f87171;display:flex;align-items:center;gap:6px;font-size:13px"><i class="ph ph-lightning" style="font-size:16px"></i> 逻辑触发器 (Triggers)</div>
-            <button @click="showTriggerModal=false" class="btn btn-ghost btn-icon"><i class="ph ph-x"></i></button>
+            <div style="display:flex;align-items:center;gap:8px">
+                <button @click="resetAllTriggers" class="btn btn-ghost btn-sm" style="font-size:11px;color:#f87171;border-color:rgba(248,113,113,.3)" title="将所有触发器重置为未触发状态"><i class="ph ph-arrow-counter-clockwise"></i> 全部重置</button>
+                <button @click="showTriggerModal=false" class="btn btn-ghost btn-icon"><i class="ph ph-x"></i></button>
+            </div>
         </div>
         <div style="flex:1;display:flex;overflow:hidden">
             <!-- 左列表 -->
@@ -1463,7 +1466,7 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:14px; h
                             <span v-if="t.conditions&&t.conditions.length>1" style="padding:2px 4px;border-radius:2px;" :style="t.conditions.slice(1).every(c=>c.joinOp==='or')?{background:'rgba(232,180,75,.08)',color:'#e8b44b'}:t.conditions.slice(1).some(c=>c.joinOp==='or')?{background:'rgba(129,140,248,.08)',color:'#818cf8'}:{background:'rgba(248,113,113,.08)',color:'#f87171'}">{{ t.conditions.slice(1).every(c=>c.joinOp==='or')?'OR':t.conditions.slice(1).some(c=>c.joinOp==='or')?'混合':'AND' }} ×{{ t.conditions.length }}</span>
                             <span v-if="t._hasGroupedConditions" style="padding:2px 4px;border-radius:2px;background:rgba(232,180,75,.08);color:#e8b44b">⚠ 分组</span>
                             <span v-for="c in (Array.isArray(t.conditions)&&t.conditions.length?t.conditions:(t.cond_type?[{type:t.cond_type}]:[]))" :key="c.type+(c.value||'')" style="background:rgba(255,255,255,.05);padding:2px 4px;border-radius:2px">{{ c.negate?'NOT ':'' }}{{ {scene:'场景',item:'物品',stat:'属性',ai:'AI'}[c.type]||c.type }}</span>
-                            <span :style="{color:t.mode==='hard'?'#f87171':'#e8b44b'}">{{ t.mode==='hard'?'强制跳':'软提示' }}</span>
+                            <span :style="{color:t.mode==='hard'?'#f87171':t.mode==='passive'?'#818cf8':'#e8b44b'}">{{ t.mode==='hard'?'强制跳':t.mode==='passive'?'静默执行':'软提示' }}</span>
                             <span>→ #{{ t.target_node_id }}</span>
                         </div>
                     </div>
@@ -1485,14 +1488,18 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:14px; h
                 </div>
                 <div>
                     <label class="tag" style="display:block;margin-bottom:8px">执行模式</label>
-                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-                        <button @click="currentTrigger.mode='hard'" class="btn" style="justify-content:flex-start;padding:12px 14px;gap:10px" :style="{background:currentTrigger.mode==='hard'?'rgba(224,92,92,.1)':'rgba(255,255,255,.03)',borderColor:currentTrigger.mode==='hard'?'rgba(224,92,92,.4)':'rgba(255,255,255,.08)',color:currentTrigger.mode==='hard'?'#f87171':'#6b7280'}">
-                            <i class="ph ph-lock-key" style="font-size:20px"></i>
-                            <div style="text-align:left"><div style="font-size:13px;font-weight:600;margin-bottom:2px">强制拦截 (Hard Lock)</div><div style="font-size:11px;opacity:.7;font-weight:400">条件满足时中断当前流程强制跳转</div></div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+                        <button @click="currentTrigger.mode='hard'" class="btn" style="justify-content:flex-start;padding:10px 12px;gap:8px" :style="{background:currentTrigger.mode==='hard'?'rgba(224,92,92,.1)':'rgba(255,255,255,.03)',borderColor:currentTrigger.mode==='hard'?'rgba(224,92,92,.4)':'rgba(255,255,255,.08)',color:currentTrigger.mode==='hard'?'#f87171':'#6b7280'}">
+                            <i class="ph ph-lock-key" style="font-size:18px;flex-shrink:0"></i>
+                            <div style="text-align:left"><div style="font-size:12px;font-weight:600;margin-bottom:2px">强制拦截</div><div style="font-size:10px;opacity:.7;font-weight:400">中断流程强制跳转</div></div>
                         </button>
-                        <button @click="currentTrigger.mode='soft'" class="btn" style="justify-content:flex-start;padding:12px 14px;gap:10px" :style="{background:currentTrigger.mode==='soft'?'rgba(232,180,75,.1)':'rgba(255,255,255,.03)',borderColor:currentTrigger.mode==='soft'?'rgba(232,180,75,.4)':'rgba(255,255,255,.08)',color:currentTrigger.mode==='soft'?'#e8b44b':'#6b7280'}">
-                            <i class="ph ph-lightbulb" style="font-size:20px"></i>
-                            <div style="text-align:left"><div style="font-size:13px;font-weight:600;margin-bottom:2px">柔性线索 (Soft Hint)</div><div style="font-size:11px;opacity:.7;font-weight:400">条件满足时仅在下方追加特殊选项</div></div>
+                        <button @click="currentTrigger.mode='soft'" class="btn" style="justify-content:flex-start;padding:10px 12px;gap:8px" :style="{background:currentTrigger.mode==='soft'?'rgba(232,180,75,.1)':'rgba(255,255,255,.03)',borderColor:currentTrigger.mode==='soft'?'rgba(232,180,75,.4)':'rgba(255,255,255,.08)',color:currentTrigger.mode==='soft'?'#e8b44b':'#6b7280'}">
+                            <i class="ph ph-lightbulb" style="font-size:18px;flex-shrink:0"></i>
+                            <div style="text-align:left"><div style="font-size:12px;font-weight:600;margin-bottom:2px">柔性线索</div><div style="font-size:10px;opacity:.7;font-weight:400">追加隐藏跳转选项</div></div>
+                        </button>
+                        <button @click="currentTrigger.mode='passive'" class="btn" style="justify-content:flex-start;padding:10px 12px;gap:8px" :style="{background:currentTrigger.mode==='passive'?'rgba(129,140,248,.1)':'rgba(255,255,255,.03)',borderColor:currentTrigger.mode==='passive'?'rgba(129,140,248,.4)':'rgba(255,255,255,.08)',color:currentTrigger.mode==='passive'?'#818cf8':'#6b7280'}">
+                            <i class="ph ph-gear" style="font-size:18px;flex-shrink:0"></i>
+                            <div style="text-align:left"><div style="font-size:12px;font-weight:600;margin-bottom:2px">静默执行</div><div style="font-size:10px;opacity:.7;font-weight:400">仅执行动作，不跳转</div></div>
                         </button>
                     </div>
                 </div>
@@ -1540,10 +1547,10 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:14px; h
                 </div>
 
                 <div>
-                    <label class="tag" style="display:block;margin-bottom:6px">冷却时间（秒）</label>
+                    <label class="tag" style="display:block;margin-bottom:6px">最大触发次数</label>
                     <div style="display:flex;align-items:center;gap:8px">
-                        <input type="number" v-model.number="currentTrigger.cooldown" min="0" step="1" class="inp" style="width:120px" placeholder="0">
-                        <span style="font-size:11px;color:#4b5563">0 = 触发一次永久封锁；>0 = 冷却后可重复触发</span>
+                        <input type="number" v-model.number="currentTrigger.max_fire_count" min="0" step="1" class="inp" style="width:120px" placeholder="0">
+                        <span style="font-size:11px;color:#4b5563">0 = 无限次触发；>0 = 触发 N 次后永久封锁</span>
                     </div>
                 </div>
                 <div>
@@ -1569,15 +1576,182 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:14px; h
                     </div>
                 </div>
 
+                <!-- 触发器动作 -->
+                <div>
+                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+                        <span class="tag">执行动作 <span style="font-weight:400;color:#4b5563">（触发时自动运行）</span></span>
+                        <button @click="addTriggerAction()" class="btn btn-ghost btn-sm" style="font-size:11px;padding:2px 8px"><i class="ph ph-plus"></i> 添加</button>
+                    </div>
+                    <div v-if="!currentTrigger.actions||!currentTrigger.actions.length" style="text-align:center;color:#4b5563;font-size:12px;padding:12px;border:1px dashed rgba(255,255,255,.08);border-radius:6px">
+                        暂无动作 — 触发后仅执行跳转（或静默完成次数统计）
+                    </div>
+                    <div v-for="(act, ai) in currentTrigger.actions" :key="ai" style="border:1px solid rgba(255,255,255,.06);border-radius:8px;padding:10px 12px;margin-bottom:6px;background:rgba(255,255,255,.02)">
+                        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+                            <select v-model="act.type" @change="resetActionFields(act)" class="inp" style="font-size:12px;flex:1">
+                                <optgroup label="── 状态层 ──">
+                                    <option value="set_flag">🚩 设置标志位</option>
+                                    <option value="mod_stat">💢 修改角色属性 (HP/SAN)</option>
+                                    <option value="add_memory">📝 写入记忆</option>
+                                    <option value="fire_trigger">⚡ 激活另一触发器</option>
+                                </optgroup>
+                                <optgroup label="── 叙事层 ──">
+                                    <option value="inject_text">📖 文本注入（追加叙事）</option>
+                                    <option value="inject_option">🔀 选项注入（插入跳转）</option>
+                                    <option value="gen_node">✨ AI 即时生成节点</option>
+                                </optgroup>
+                                <optgroup label="── 实体层 ──">
+                                    <option value="mod_inventory">🎒 修改物品栏</option>
+                                    <option value="mod_npc">👤 修改 NPC 状态</option>
+                                    <option value="entity_script">⚙️ 实体脚本</option>
+                                </optgroup>
+                                <optgroup label="── 世界构建层 ──">
+                                    <option value="spawn_npc">🧑 预设 NPC 登场</option>
+                                    <option value="mod_worldview">🌍 修改世界观</option>
+                                    <option value="add_lore">📚 新增 RAG 百科</option>
+                                    <option value="reveal_rag">🔓 解锁隐藏文档</option>
+                                </optgroup>
+                            </select>
+                            <button @click="currentTrigger.actions.splice(ai,1)" class="btn btn-ghost btn-sm" style="padding:2px 4px;opacity:.4;flex-shrink:0"><i class="ph ph-x"></i></button>
+                        </div>
+                        <template v-if="act.type==='set_flag'">
+                            <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+                                <input type="text" v-model="act.key" class="inp inp-mono" style="font-size:12px" placeholder="标志名 (如: boss_defeated)">
+                                <input type="text" v-model="act.value" class="inp inp-mono" style="font-size:12px" placeholder="值 (如: 1 / true)">
+                            </div>
+                        </template>
+                        <template v-else-if="act.type==='mod_stat'">
+                            <div style="display:grid;grid-template-columns:1fr auto 80px;gap:6px">
+                                <input type="text" v-model="act.target" class="inp" style="font-size:12px" placeholder="PC（全体）或 角色名">
+                                <select v-model="act.attr" class="inp" style="font-size:12px;width:80px">
+                                    <option value="hp">HP</option>
+                                    <option value="san">SAN</option>
+                                </select>
+                                <input type="number" v-model.number="act.delta" class="inp inp-mono" style="font-size:12px" placeholder="±值">
+                            </div>
+                        </template>
+                        <template v-else-if="act.type==='add_memory'">
+                            <textarea v-model="act.text" class="inp" style="height:56px;resize:none;font-size:12px;line-height:1.5" placeholder="写入游戏记忆的文本…"></textarea>
+                        </template>
+                        <template v-else-if="act.type==='fire_trigger'">
+                            <select v-model="act.id" class="inp" style="font-size:12px">
+                                <option value="" disabled>-- 选择目标触发器 --</option>
+                                <option v-for="t2 in triggers.filter(t2=>t2.id!==currentTrigger.id)" :key="t2.id" :value="t2.id">#{{ t2.id }} {{ t2.label||'未命名' }}</option>
+                            </select>
+                        </template>
+                        <!-- 叙事层 -->
+                        <template v-else-if="act.type==='inject_text'">
+                            <textarea v-model="act.text" class="inp" style="height:64px;resize:none;font-size:12px;line-height:1.5" placeholder="追加到当前场景叙事末尾的文字…"></textarea>
+                        </template>
+                        <template v-else-if="act.type==='inject_option'">
+                            <div style="display:flex;flex-direction:column;gap:6px">
+                                <input type="text" v-model="act.text" class="inp" style="font-size:12px" placeholder="选项文本（玩家可见）">
+                                <div style="display:flex;align-items:center;gap:6px">
+                                    <span style="font-size:11px;color:#4b5563;white-space:nowrap">跳转至</span>
+                                    <select v-model.number="act.next_node_id" class="inp" style="font-size:12px;flex:1">
+                                        <option :value="0" disabled>-- 目标节点 --</option>
+                                        <option v-for="n in storyNodes" :key="n.id" :value="n.id">#{{ n.id }} — {{ n.name }}</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </template>
+                        <template v-else-if="act.type==='gen_node'">
+                            <div style="display:flex;flex-direction:column;gap:6px">
+                                <textarea v-model="act.prompt" class="inp" style="height:64px;resize:none;font-size:12px;line-height:1.5" placeholder="生成提示：如「玩家触碰了封印，黑暗苏醒，城堡开始崩塌」"></textarea>
+                                <div style="display:flex;align-items:center;gap:8px">
+                                    <span style="font-size:11px;color:#4b5563">生成后</span>
+                                    <button @click="act.mode='soft'" class="btn btn-sm" style="font-size:11px;padding:2px 10px" :style="act.mode!=='hard'?{background:'rgba(232,180,75,.12)',color:'#e8b44b',borderColor:'rgba(232,180,75,.4)'}:{color:'#4b5563'}">软跳转</button>
+                                    <button @click="act.mode='hard'" class="btn btn-sm" style="font-size:11px;padding:2px 10px" :style="act.mode==='hard'?{background:'rgba(248,113,113,.12)',color:'#f87171',borderColor:'rgba(248,113,113,.4)'}:{color:'#4b5563'}">强制跳转</button>
+                                </div>
+                            </div>
+                        </template>
+                        <!-- 实体层 -->
+                        <template v-else-if="act.type==='mod_inventory'">
+                            <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:6px">
+                                <input type="text" v-model="act.target" class="inp" style="font-size:12px" placeholder="PC 或 角色名">
+                                <select v-model="act.op" class="inp" style="font-size:12px;width:80px">
+                                    <option value="add">添加</option>
+                                    <option value="remove">移除</option>
+                                </select>
+                                <input type="text" v-model="act.item" class="inp" style="font-size:12px" placeholder="物品名称">
+                            </div>
+                        </template>
+                        <template v-else-if="act.type==='mod_npc'">
+                            <div style="display:flex;flex-direction:column;gap:6px">
+                                <input type="text" v-model="act.name" class="inp" style="font-size:12px" placeholder="实体名称（精确匹配）">
+                                <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+                                    <select v-model="act.field" class="inp" style="font-size:12px">
+                                        <option value="emotion_trust">情感 · 信任</option>
+                                        <option value="emotion_fear">情感 · 恐惧</option>
+                                        <option value="emotion_irritation">情感 · 愤怒</option>
+                                        <option value="memory_add">写入记忆</option>
+                                    </select>
+                                    <input v-if="act.field==='memory_add'" type="text" v-model="act.value" class="inp" style="font-size:12px" placeholder="记忆文本">
+                                    <input v-else type="number" v-model.number="act.delta" class="inp inp-mono" style="font-size:12px" placeholder="±值 (-100~100)">
+                                </div>
+                            </div>
+                        </template>
+                        <template v-else-if="act.type==='entity_script'">
+                            <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+                                <input type="text" v-model="act.name" class="inp" style="font-size:12px" placeholder="实体名称">
+                                <select v-model="act.action" class="inp" style="font-size:12px">
+                                    <option value="appear">登场 (appear)</option>
+                                    <option value="leave">离场 (leave)</option>
+                                    <option value="die">死亡 (die)</option>
+                                    <option value="attack">发动攻击 (attack)</option>
+                                </select>
+                            </div>
+                        </template>
+                        <!-- 世界构建层 -->
+                        <template v-else-if="act.type==='spawn_npc'">
+                            <div style="display:flex;flex-direction:column;gap:6px">
+                                <div style="display:grid;grid-template-columns:1fr 60px 60px;gap:6px">
+                                    <input type="text" v-model="act.name" class="inp" style="font-size:12px" placeholder="NPC 名称">
+                                    <input type="number" v-model.number="act.hp" class="inp inp-mono" style="font-size:12px" placeholder="HP">
+                                    <input type="number" v-model.number="act.san" class="inp inp-mono" style="font-size:12px" placeholder="SAN">
+                                </div>
+                                <input type="text" v-model="act.inventory" class="inp" style="font-size:12px" placeholder="初始物品（可空）">
+                                <textarea v-model="act.desc" class="inp" style="height:56px;resize:none;font-size:12px;line-height:1.5" placeholder="角色背景/描述（可空，将注入实体状态机）"></textarea>
+                            </div>
+                        </template>
+                        <template v-else-if="act.type==='mod_worldview'">
+                            <div style="display:flex;flex-direction:column;gap:6px">
+                                <div style="display:flex;gap:6px">
+                                    <button @click="act.op='append'" class="btn btn-sm" style="font-size:11px;padding:2px 12px;flex:1" :style="act.op!=='replace'?{background:'rgba(79,201,138,.1)',color:'#4fc98a',borderColor:'rgba(79,201,138,.4)'}:{color:'#4b5563'}">追加</button>
+                                    <button @click="act.op='replace'" class="btn btn-sm" style="font-size:11px;padding:2px 12px;flex:1" :style="act.op==='replace'?{background:'rgba(248,113,113,.1)',color:'#f87171',borderColor:'rgba(248,113,113,.4)'}:{color:'#4b5563'}">替换全文</button>
+                                </div>
+                                <textarea v-model="act.text" class="inp" style="height:72px;resize:none;font-size:12px;line-height:1.5" :placeholder="act.op==='replace'?'新的完整世界观文本…':'追加到世界观末尾的内容…'"></textarea>
+                            </div>
+                        </template>
+                        <template v-else-if="act.type==='add_lore'">
+                            <div style="display:flex;flex-direction:column;gap:6px">
+                                <input type="text" v-model="act.keywords" class="inp" style="font-size:12px" placeholder="关键词（逗号分隔，如：古神,封印,禁忌仪式）">
+                                <textarea v-model="act.content" class="inp" style="height:64px;resize:none;font-size:12px;line-height:1.5" placeholder="百科内容（AI 在相关场景会自动检索到此条目）"></textarea>
+                            </div>
+                        </template>
+
+                        <template v-else-if="act.type==='reveal_rag'">
+                            <div style="display:flex;flex-direction:column;gap:6px">
+                                <select v-model="act.doc_id" class="inp" style="font-size:12px">
+                                    <option :value="0" disabled>— 选择要解锁的隐藏文档 —</option>
+                                    <option v-for="doc in ragDocuments.filter(d=>d.hidden)" :key="doc.id" :value="doc.id">
+                                        🔒 [{{ doc.id }}] {{ doc.title }}
+                                    </option>
+                                </select>
+                                <div v-if="!ragDocuments.filter(d=>d.hidden).length" style="font-size:11px;color:#6b7280;padding:2px 4px">暂无隐藏文档——请先在 RAG 管理中上传并设为隐藏</div>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+
                 <div v-if="currentTrigger.id" style="display:flex;align-items:center;justify-content:space-between;background:#090b10;border:1px solid rgba(255,255,255,.06);border-radius:6px;padding:12px 16px;margin-top:8px">
-                    <span style="font-size:13px;color:#6b7280">当前触发器状态：<b :style="{color:currentTrigger.fired?'#4fc98a':'#6b7280'}">{{ currentTrigger.fired?'已在会话中激活':'待命监测中' }}</b><span v-if="currentTrigger.fire_count>0" style="margin-left:8px;color:#4b5563">（共触发 {{ currentTrigger.fire_count }} 次）</span></b></span>
+                    <span style="font-size:13px;color:#6b7280">当前触发器状态：<b :style="{color:currentTrigger.fired?'#4fc98a':'#6b7280'}">{{ currentTrigger.fired?'已在会话中激活':'待命监测中' }}</b><span v-if="currentTrigger.fire_count>0" style="margin-left:8px;color:#4b5563">（共触发 {{ currentTrigger.fire_count }} 次）</span><span v-if="currentTrigger.max_fire_count>0" style="margin-left:6px;color:#4b5563">/ 上限 {{ currentTrigger.max_fire_count }} 次</span></span>
                     <button v-if="currentTrigger.fired||currentTrigger.fire_count>0" @click="resetTriggerFired(currentTrigger.id)" class="btn btn-ghost btn-sm"><i class="ph ph-arrow-counter-clockwise"></i> 重置待命</button>
                 </div>
 
                 <div style="display:flex;justify-content:space-between;margin-top:auto;padding-top:16px;border-top:1px solid rgba(255,255,255,.06)">
                     <button v-if="currentTrigger.id" @click="deleteTrigger(currentTrigger.id)" class="btn btn-danger"><i class="ph ph-trash"></i></button>
                     <div v-else></div>
-                    <button @click="saveTrigger" :disabled="!currentTrigger.target_node_id||!currentTrigger.conditions||!currentTrigger.conditions.some(c=>c.value)" class="btn btn-danger" style="background:rgba(248,113,113,.12);border-color:rgba(248,113,113,.4);color:#f87171">
+                    <button @click="saveTrigger" :disabled="(!currentTrigger.target_node_id&&currentTrigger.mode!=='passive')||!currentTrigger.conditions||!currentTrigger.conditions.some(c=>c.value)" class="btn btn-danger" style="background:rgba(248,113,113,.12);border-color:rgba(248,113,113,.4);color:#f87171">
                         <i class="ph ph-floppy-disk"></i> 保存并挂载
                     </button>
                 </div>
@@ -1623,14 +1797,35 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:14px; h
 </div>
 
 <!-- ── Toast：触发器激活 ── -->
-<div v-if="triggerAlert" class="toast-box" style="top:72px;left:50%;transform:translateX(-50%);width:420px;text-align:center;background:rgba(11,14,23,.97)" :style="{borderColor:triggerAlert.mode==='hard'?'rgba(224,92,92,.4)':'rgba(232,180,75,.4)'}">
-    <i :class="['ph',triggerAlert.mode==='hard'?'ph-lock-key':'ph-lightbulb']" :style="{fontSize:'32px',display:'block',marginBottom:'12px',color:triggerAlert.mode==='hard'?'#e05c5c':'#e8b44b'}"></i>
-    <div style="font-size:16px;font-weight:700;color:#f5edd8;margin-bottom:6px">{{ triggerAlert.label }}</div>
-    <div style="font-size:13px;color:#9ca3af;margin-bottom:16px">目标：<span style="color:#c9cdd6;font-weight:600">{{ triggerAlert.target_node_name }}</span></div>
-    <div v-if="triggerAlert.mode==='hard'" style="font-size:12px;font-weight:600;color:#e05c5c;margin-bottom:12px">强制拦截，3 秒后自动传送…</div>
+<!-- 主触发器弹窗（hard / soft 模式） -->
+<div v-if="triggerAlert" class="toast-box" style="top:72px;left:calc(50% - 220px);width:440px;text-align:center;background:rgba(11,14,23,.97)" :style="{borderColor:triggerAlert.mode==='hard'?'rgba(224,92,92,.4)':'rgba(232,180,75,.4)'}">
+    <i :class="['ph',triggerAlert.mode==='hard'?'ph-lock-key':'ph-lightbulb']" :style="{fontSize:'28px',display:'block',marginBottom:'10px',color:triggerAlert.mode==='hard'?'#e05c5c':'#e8b44b'}"></i>
+    <div style="font-size:15px;font-weight:700;color:#f5edd8;margin-bottom:4px">{{ triggerAlert.label }}</div>
+    <div style="font-size:12px;color:#9ca3af;margin-bottom:10px">目标：<span style="color:#c9cdd6;font-weight:600">{{ triggerAlert.target_node_name }}</span></div>
+    <!-- 动作执行日志 -->
+    <div v-if="triggerAlert.actions_log&&triggerAlert.actions_log.length" style="text-align:left;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);border-radius:6px;padding:8px 10px;margin-bottom:10px;display:flex;flex-direction:column;gap:3px">
+        <div style="font-size:10px;color:#4b5563;font-weight:700;letter-spacing:.06em;margin-bottom:3px">执行动作</div>
+        <div v-for="entry in triggerAlert.actions_log" :key="entry" style="font-size:12px;color:#9ca3af;line-height:1.5">{{ entry }}</div>
+    </div>
+    <div v-if="triggerAlert.mode==='hard'" style="font-size:12px;font-weight:600;color:#e05c5c;margin-bottom:10px">强制拦截，3 秒后自动传送…</div>
     <div style="display:flex;justify-content:center;gap:12px">
         <button v-if="triggerAlert.mode==='hard'" @click="jumpToNode(triggerAlert.target_node_id);triggerAlert=null" class="btn btn-danger">立即传送</button>
         <button @click="triggerAlert=null" class="btn btn-ghost">{{ triggerAlert.mode==='hard'?'拦截取消':'收到' }}</button>
+    </div>
+</div>
+
+<!-- passive 触发器静默提示（右下角小条） -->
+<div v-if="passiveAlerts&&passiveAlerts.length" style="position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:6px;z-index:999;pointer-events:none">
+    <div v-for="(pa,pi) in passiveAlerts" :key="pi"
+         style="background:rgba(11,14,23,.92);border:1px solid rgba(129,140,248,.3);border-radius:8px;padding:8px 12px;max-width:280px;pointer-events:auto">
+        <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
+            <i class="ph ph-gear" style="font-size:12px;color:#818cf8"></i>
+            <span style="font-size:11px;font-weight:700;color:#818cf8">{{ pa.label }}</span>
+            <span style="font-size:10px;color:#374151;margin-left:auto">静默触发</span>
+        </div>
+        <div v-if="pa.actions_log&&pa.actions_log.length" style="display:flex;flex-direction:column;gap:2px">
+            <div v-for="entry in pa.actions_log" :key="entry" style="font-size:11px;color:#6b7280;line-height:1.4">{{ entry }}</div>
+        </div>
     </div>
 </div>
 
@@ -2112,8 +2307,10 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:14px; h
                          style="padding:10px 12px;border-radius:6px;border:1px solid rgba(255,255,255,.05);background:#0b0e17;cursor:pointer;margin-bottom:5px;transition:all .12s"
                          :style="ragSelectedDoc&&ragSelectedDoc.id===doc.id?{borderColor:'rgba(129,140,248,.4)',background:'rgba(129,140,248,.05)'}:{}">
                         <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
-                            <i class="ph ph-file-text" style="font-size:13px;color:#818cf8;flex-shrink:0"></i>
+                            <i :class="doc.hidden ? 'ph ph-lock' : 'ph ph-file-text'"
+                               :style="{fontSize:'13px',color:doc.hidden?'#f59e0b':'#818cf8',flexShrink:0}"></i>
                             <span style="font-size:13px;font-weight:600;color:#e2e8f0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ doc.title }}</span>
+                            <span v-if="doc.hidden" style="font-size:9px;font-weight:700;color:#f59e0b;background:rgba(245,158,11,.12);border:1px solid rgba(245,158,11,.25);border-radius:3px;padding:1px 5px;flex-shrink:0">隐藏</span>
                         </div>
                         <div style="display:flex;gap:10px;font-family:'JetBrains Mono';font-size:10px;color:#4b5563">
                             <span>{{ doc.chunk_count }} 个切片</span>
@@ -2189,6 +2386,25 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:14px; h
                         <div>
                             <label class="tag" style="display:block;margin-bottom:6px">来源标注（可选）</label>
                             <input v-model="ragForm.source" class="inp" placeholder="例如：GM 手册 P.12">
+                        </div>
+                    </div>
+
+                    <!-- 隐藏选项 -->
+                    <div @click="ragForm.hidden=!ragForm.hidden"
+                         style="display:flex;align-items:center;gap:10px;padding:10px 14px;border-radius:6px;cursor:pointer;transition:all .12s;user-select:none"
+                         :style="ragForm.hidden?{background:'rgba(245,158,11,.06)',border:'1px solid rgba(245,158,11,.25)'}:{background:'rgba(255,255,255,.02)',border:'1px solid rgba(255,255,255,.06)'}">
+                        <i :class="ragForm.hidden?'ph-fill ph-lock':'ph ph-lock-open'"
+                           :style="{fontSize:'15px',color:ragForm.hidden?'#f59e0b':'#4b5563',transition:'color .12s'}"></i>
+                        <div style="flex:1">
+                            <div :style="{fontSize:'13px',fontWeight:600,color:ragForm.hidden?'#f59e0b':'#6b7280',transition:'color .12s'}">
+                                {{ ragForm.hidden ? '导入为隐藏文档' : '导入为公开文档' }}
+                            </div>
+                            <div style="font-size:11px;color:#4b5563;margin-top:1px">
+                                {{ ragForm.hidden ? '触发器解锁前 AI 无法检索此文档' : 'AI 推演时可直接语义检索此文档' }}
+                            </div>
+                        </div>
+                        <div :style="{width:'32px',height:'18px',borderRadius:'9px',transition:'background .15s',background:ragForm.hidden?'#f59e0b':'rgba(255,255,255,.1)',position:'relative',flexShrink:0}">
+                            <div :style="{position:'absolute',top:'3px',width:'12px',height:'12px',borderRadius:'50%',background:'#fff',transition:'left .15s',left:ragForm.hidden?'17px':'3px'}"></div>
                         </div>
                     </div>
 
@@ -2289,14 +2505,24 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:14px; h
                     <template v-else>
                         <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:4px">
                             <div>
-                                <div style="font-size:17px;font-weight:700;color:#e2e8f0;margin-bottom:4px">{{ ragSelectedDoc.title }}</div>
+                                <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+                                    <span style="font-size:17px;font-weight:700;color:#e2e8f0">{{ ragSelectedDoc.title }}</span>
+                                    <span v-if="ragSelectedDoc.hidden" style="font-size:10px;font-weight:700;color:#f59e0b;background:rgba(245,158,11,.12);border:1px solid rgba(245,158,11,.3);border-radius:4px;padding:2px 7px">隐藏中</span>
+                                </div>
                                 <div style="font-size:12px;color:#4b5563;font-family:'JetBrains Mono'">
                                     {{ ragSelectedDoc.chunk_count }} 个切片 · {{ ragSelectedDoc.source || '无来源标注' }} · {{ ragSelectedDoc.created_at }}
                                 </div>
                             </div>
-                            <button @click="ragDeleteDoc(ragSelectedDoc.id)" class="btn btn-danger btn-sm" style="flex-shrink:0">
-                                <i class="ph ph-trash"></i> 删除
-                            </button>
+                            <div style="display:flex;gap:6px;flex-shrink:0">
+                                <button @click="ragToggleHidden(ragSelectedDoc)" class="btn btn-sm"
+                                        :style="ragSelectedDoc.hidden?{background:'rgba(245,158,11,.1)',borderColor:'rgba(245,158,11,.35)',color:'#f59e0b'}:{background:'rgba(255,255,255,.04)',borderColor:'rgba(255,255,255,.1)',color:'#6b7280'}">
+                                    <i :class="ragSelectedDoc.hidden?'ph ph-lock-open':'ph ph-lock'"></i>
+                                    {{ ragSelectedDoc.hidden ? '解除隐藏' : '设为隐藏' }}
+                                </button>
+                                <button @click="ragDeleteDoc(ragSelectedDoc.id)" class="btn btn-danger btn-sm">
+                                    <i class="ph ph-trash"></i> 删除
+                                </button>
+                            </div>
                         </div>
                         <div style="padding:14px 16px;background:#0b0e17;border:1px solid rgba(255,255,255,.06);border-radius:6px;font-size:12px;color:#6b7280;line-height:1.7">
                             <div style="display:flex;gap:20px;flex-wrap:wrap">
@@ -2306,9 +2532,10 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:14px; h
                                 <span><i class="ph ph-check-circle" style="margin-right:4px;color:#4fc98a"></i>已向量化</span>
                             </div>
                         </div>
-                        <div style="padding:10px 14px;background:rgba(129,140,248,.04);border:1px solid rgba(129,140,248,.1);border-radius:6px;font-size:12px;color:#818cf8;line-height:1.7">
-                            <i class="ph ph-info" style="margin-right:6px"></i>
-                            此文档已被切分为 {{ ragSelectedDoc.chunk_count }} 段，每次 AI 推演时系统将自动检索与当前场景最相关的 {{ 4 }} 段注入 prompt，无需手动操作。
+                        <div :style="ragSelectedDoc.hidden?{padding:'10px 14px',background:'rgba(245,158,11,.04)',border:'1px solid rgba(245,158,11,.15)',borderRadius:'6px',fontSize:'12px',color:'#d97706',lineHeight:'1.7'}:{padding:'10px 14px',background:'rgba(129,140,248,.04)',border:'1px solid rgba(129,140,248,.1)',borderRadius:'6px',fontSize:'12px',color:'#818cf8',lineHeight:'1.7'}">
+                            <i :class="ragSelectedDoc.hidden?'ph ph-lock':'ph ph-info'" style="margin-right:6px"></i>
+                            <template v-if="ragSelectedDoc.hidden">此文档处于隐藏状态，AI 推演时不会检索到它。可通过触发器的「解锁隐藏文档」动作在游戏中解锁，或点击「解除隐藏」立即公开。</template>
+                            <template v-else>此文档已被切分为 {{ ragSelectedDoc.chunk_count }} 段，每次 AI 推演时系统将自动检索与当前场景最相关的 {{ 4 }} 段注入 prompt，无需手动操作。</template>
                         </div>
                     </template>
                 </div>
@@ -3020,7 +3247,18 @@ createApp({
         const showNpcToast = (npc) => { npcToast.value = npc; if(npcToastTimer) clearTimeout(npcToastTimer); npcToastTimer = setTimeout(()=>{npcToast.value=null;}, 6000); };
         const triggerAlert = ref(null);
         let triggerAlertTimer = null;
+        const passiveAlerts = ref([]);
+        let passiveAlertTimer = null;
         const showTriggerAlert = (fired) => {
+            if (fired.mode === 'passive') {
+                // 静默触发：右下角小条显示动作摘要
+                if (fired.actions_log && fired.actions_log.length) {
+                    passiveAlerts.value.push(fired);
+                    if (passiveAlertTimer) clearTimeout(passiveAlertTimer);
+                    passiveAlertTimer = setTimeout(() => { passiveAlerts.value = []; }, 6000);
+                }
+                return;
+            }
             triggerAlert.value = fired; if(triggerAlertTimer) clearTimeout(triggerAlertTimer);
             if(fired.mode==='hard') { triggerAlertTimer = setTimeout(()=>{ jumpToNode(fired.target_node_id); triggerAlert.value=null; }, 3000); }
             else { triggerAlertTimer = setTimeout(()=>{triggerAlert.value=null;}, 8000); }
@@ -3440,7 +3678,7 @@ createApp({
         const ragTab           = ref('import');
         const ragDocuments     = ref([]);
         const ragSelectedDoc   = ref(null);
-        const ragForm          = ref({ title: '', source: '', text: '' });
+        const ragForm          = ref({ title: '', source: '', text: '', hidden: false });
         const ragIngesting     = ref(false);
         const ragIngestResult  = ref(null);
         const ragSearchQuery   = ref('');
@@ -3507,6 +3745,7 @@ createApp({
                     fd.append('source',        ragForm.value.source.trim() || ragUploadFile.value.name);
                     fd.append('chunk_size',    ragChunkSize.value);
                     fd.append('chunk_overlap', ragChunkOverlap.value);
+                    fd.append('hidden',        ragForm.value.hidden ? 1 : 0);
                     const r = await fetch(`${API_BASE_URL}/api/rag/upload`, {
                         method: 'POST',
                         body: fd          // 不设 Content-Type，让浏览器自动设置 multipart/form-data
@@ -3533,6 +3772,7 @@ createApp({
                             text:          ragForm.value.text.trim(),
                             chunk_size:    ragChunkSize.value,
                             chunk_overlap: ragChunkOverlap.value,
+                            hidden:        ragForm.value.hidden ? 1 : 0,
                         })
                     });
                     d = await r.json();
@@ -3545,7 +3785,7 @@ createApp({
                 }
 
                 if (d && d.status === 'success') {
-                    ragForm.value       = { title: '', source: '', text: '' };
+                    ragForm.value       = { title: '', source: '', text: '', hidden: false };
                     ragUploadFile.value = null;
                     await fetchRagDocuments();
                     ragTab.value        = 'view';
@@ -3568,6 +3808,13 @@ createApp({
             await fetch(`${API_BASE_URL}/api/rag/documents/${id}`, { method: 'DELETE' });
             ragSelectedDoc.value = null;
             await fetchRagDocuments();
+        };
+
+        const ragToggleHidden = async doc => {
+            const newHidden = doc.hidden ? 0 : 1;
+            await fetch(`${API_BASE_URL}/api/rag/documents/${doc.id}/hidden?hidden=${newHidden}`, { method: 'PATCH' });
+            await fetchRagDocuments();
+            ragSelectedDoc.value = ragDocuments.value.find(d => d.id === doc.id) || null;
         };
 
         const ragSearch = async () => {
@@ -3645,19 +3892,43 @@ createApp({
             } catch(e) {}
         };
         const openTriggerModal = () => { fetchTriggers(); showTriggerModal.value=true; };
-        const newTrigger = () => { currentTrigger.value={label:'',target_node_id:'',mode:'soft',conditions:[{type:'scene',value:'',negate:false}],fired:0,fire_count:0,cooldown:0,prerequisite_trigger_ids:[],exclude_trigger_ids:[]}; };
-        const selectTrigger = t => { const copy=JSON.parse(JSON.stringify(t)); if(!Array.isArray(copy.conditions)||!copy.conditions.length){if(copy.cond_type)copy.conditions=[{type:copy.cond_type,value:copy.cond_value||'',negate:false}];else copy.conditions=[];} currentTrigger.value=copy; };
+        const newTrigger = () => { currentTrigger.value={label:'',target_node_id:'',mode:'soft',conditions:[{type:'scene',value:'',negate:false}],fired:0,fire_count:0,cooldown:0,max_fire_count:0,actions:[],prerequisite_trigger_ids:[],exclude_trigger_ids:[]}; };
+        const selectTrigger = t => { const copy=JSON.parse(JSON.stringify(t)); if(!Array.isArray(copy.conditions)||!copy.conditions.length){if(copy.cond_type)copy.conditions=[{type:copy.cond_type,value:copy.cond_value||'',negate:false}];else copy.conditions=[];} if(!Array.isArray(copy.actions))copy.actions=[]; currentTrigger.value=copy; };
         const saveTrigger = async () => {
             const t = currentTrigger.value;
-            if (!t.target_node_id || !t.conditions || !t.conditions.some(c => c.value)) return;
+            if ((!t.target_node_id && t.mode !== 'passive') || !t.conditions || !t.conditions.some(c => c.value)) return;
             const isNew = !t.id;
             const url = isNew ? `${API_BASE_URL}/api/game/trigger` : `${API_BASE_URL}/api/game/trigger/${t.id}`;
-            const payload = { label: t.label||'触发器', target_node_id: parseInt(t.target_node_id), mode: t.mode, conditions: _buildTree(t.conditions), cooldown: t.cooldown||0, prerequisite_trigger_ids: t.prerequisite_trigger_ids||[], exclude_trigger_ids: t.exclude_trigger_ids||[] };
+            const payload = { label: t.label||'触发器', target_node_id: t.target_node_id ? parseInt(t.target_node_id) : 0, mode: t.mode, conditions: _buildTree(t.conditions), cooldown: t.cooldown||0, max_fire_count: t.max_fire_count||0, actions: t.actions||[], prerequisite_trigger_ids: t.prerequisite_trigger_ids||[], exclude_trigger_ids: t.exclude_trigger_ids||[] };
             try { const r=await fetch(url,{method:isNew?'POST':'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
                 if(r.ok){await fetchTriggers();currentTrigger.value=null;} } catch(e){}
         };
+        const addTriggerAction = () => {
+            if (!currentTrigger.value.actions) currentTrigger.value.actions = [];
+            currentTrigger.value.actions.push({type:'set_flag', key:'', value:'1'});
+        };
+        const resetActionFields = (act) => {
+            const defaults = {
+                set_flag:      {key:'', value:'1'},
+                mod_stat:      {target:'PC', attr:'hp', delta:0},
+                add_memory:    {text:''},
+                fire_trigger:  {id:''},
+                inject_text:   {text:''},
+                inject_option: {text:'', next_node_id:0},
+                gen_node:      {prompt:'', mode:'soft'},
+                mod_inventory: {target:'PC', op:'add', item:''},
+                mod_npc:       {name:'', field:'emotion_trust', delta:0},
+                entity_script: {name:'', action:'appear'},
+                spawn_npc:     {name:'', hp:100, san:80, inventory:'', desc:''},
+                mod_worldview: {op:'append', text:''},
+                add_lore:      {keywords:'', content:''},
+                reveal_rag:    {doc_id: 0},
+            };
+            const t = act.type; Object.keys(act).forEach(k=>{ if(k!=='type') delete act[k]; }); Object.assign(act, defaults[t]||{});
+        };
         const deleteTrigger = async id => { if(!confirm('彻底删除此触发器？'))return; await fetch(`${API_BASE_URL}/api/game/trigger/${id}`,{method:'DELETE'}); await fetchTriggers(); currentTrigger.value=null; };
-        const resetTriggerFired = async id => { await fetch(`${API_BASE_URL}/api/game/trigger/${id}/reset`,{method:'POST'}); await fetchTriggers(); if(currentTrigger.value&&currentTrigger.value.id===id) currentTrigger.value={...currentTrigger.value,fired:0}; };
+        const resetTriggerFired = async id => { await fetch(`${API_BASE_URL}/api/game/trigger/${id}/reset`,{method:'POST'}); await fetchTriggers(); if(currentTrigger.value&&currentTrigger.value.id===id) currentTrigger.value={...currentTrigger.value,fired:0,fire_count:0}; };
+        const resetAllTriggers = async () => { if(!confirm('将所有触发器重置为未触发状态？'))return; await fetch(`${API_BASE_URL}/api/game/triggers/reset-all`,{method:'POST'}); await fetchTriggers(); if(currentTrigger.value) currentTrigger.value={...currentTrigger.value,fired:0,fire_count:0}; };
 
         // ── Campaigns ──
         const fetchCampaigns = async () => { try { const r=await fetch(`${API_BASE_URL}/api/campaigns`); const d=await r.json(); let raw=d.files||d.files_legacy||[]; if(raw.length>0&&typeof raw[0]==='string'){raw=raw.map(f=>({name:f,type:'legacy',path:f}));} campaignFiles.value=raw; const def=campaignFiles.value.find(f=>f.name==='campaign_settings.json'||f.name==='campaign_settings'); if(def)selectedCampaign.value=def.path; else if(campaignFiles.value.length>0)selectedCampaign.value=campaignFiles.value[0].path; } catch(e){} };
@@ -3855,7 +4126,8 @@ createApp({
                     .then(r=>r.json()).then(d=>{if(d.spawned_npc){fetchGameState();showNpcToast(d.spawned_npc);}}).catch(()=>{});
                 }
                 fetch(`${API_BASE_URL}/api/game/check-triggers`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scene_id:next.id,scene_name:next.name,scene_content:next.content||''})})
-                .then(r=>r.json()).then(d=>{
+                .then(r=>{if(!r.ok)throw new Error(`HTTP ${r.status}`);return r.json();}).then(d=>{
+                    console.log('[check-triggers]', d);
                     if(d.fired&&d.fired.length>0){
                         d.fired.forEach(fired=>{showTriggerAlert(fired);
                             if(fired.mode==='soft'&&currentNode.value&&currentNode.value.id===next.id){
@@ -3865,7 +4137,38 @@ createApp({
                             }
                         }); fetchTriggers();
                     }
-                }).catch(()=>{});
+                    // 文本注入：向当前节点叙事追加内容（立即反映，无需刷新）
+                    if(d.text_injections&&d.text_injections.length>0){
+                        d.text_injections.forEach(inj=>{
+                            if(currentNode.value&&currentNode.value.id===inj.node_id){
+                                const appended = '\n\n' + inj.text;
+                                if(currentNode.value.expanded_content){ currentNode.value.expanded_content+=appended; expandingBranchText.value+=appended; }
+                                else { currentNode.value.content+=appended; }
+                            }
+                        });
+                    }
+                    // 选项注入：向当前节点追加新选项
+                    if(d.option_injections&&d.option_injections.length>0){
+                        d.option_injections.forEach(inj=>{
+                            if(currentNode.value&&currentNode.value.id===inj.node_id){
+                                if(!currentNode.value.options)currentNode.value.options=[];
+                                if(!currentNode.value.options.some(o=>o.id===inj.option_id))
+                                    currentNode.value.options.push({id:inj.option_id,text:inj.text,next_node_id:inj.next_node_id,_injected:true});
+                            }
+                        });
+                    }
+                    // AI 即时生成节点：加入节点树并处理跳转
+                    if(d.generated_nodes&&d.generated_nodes.length>0){
+                        d.generated_nodes.forEach(gen=>{
+                            storyNodes.value.push({id:gen.node_id,name:gen.node_name,summary:'',content:gen.node_content,expanded_content:'',options:[]});
+                            showTriggerAlert({trigger_id:gen.trigger_id,label:'AI生成：'+gen.node_name,mode:gen.mode,target_node_id:gen.node_id,target_node_name:gen.node_name,fire_count:1});
+                            if(gen.mode==='soft'&&currentNode.value&&currentNode.value.id===next.id){
+                                if(!currentNode.value.options)currentNode.value.options=[];
+                                currentNode.value.options.push({id:'gen_'+gen.node_id,text:'[AI生成] '+gen.node_name,next_node_id:gen.node_id,_trigger:true,_generated:true});
+                            }
+                        });
+                    }
+                }).catch(e=>{ console.error('[check-triggers error]', e); });
             }
             fetch(`${API_BASE_URL}/api/player/state`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({current_scene_id:next.id,scene_image:generatedImageUrl.value||'',scene_prompt:imgPromptUsed.value||'',scene_ai_text:'',bgm_url:currentTrackUrl.value||'',bgm_name:(tracks.value.find(t=>t.id===currentTrackId.value)||{}).name||''})}).catch(()=>{});
         };
@@ -4752,7 +5055,7 @@ createApp({
             appState, isLoading, dbConnected, campaignFiles, selectedCampaign,
             // AI 模型
             aiModels, activeAiModel, fetchAiModels, switchAiModel, modelAccentColor, modelAccentRgb, modelIcon, cycleModel,
-            storyNodes, characters, currentNode, isEditMode, hpLabel, sanLabel, editData, newOptionText, newOptionTarget, showWorldviewModal, worldviewContent, showMemoryModal, memoryContent, showLorebookModal, lorebook, currentLore, aiGeneratedText, playerAction, actionType, isGeneratingText, checkpointCount, isRollingBack, goBack, isGeneratingOptions, isRecording, toggleVoiceInput, ttsPlaying, ttsVoice, ttsTone, ttsRate, ttsSpeak, imgPrompt, imgStyle, imgModel, isGeneratingImage, isLoadingImg, generatedImageUrl, imgEnPrompt, imgPromptUsed, imgLoadError, audioRef, tracks, currentTrackId, currentTrackUrl, customTrackUrl, isPlaying, volume, narrativeMood, timeSkipInput, forceNarrativeThrust, optionLikelihoods, fateSpinning, fateHighlightIdx, showTriggerModal, triggers, currentTrigger, condTypes, showCharModal, isGeneratingNPC, isExpandingBranch, expandingBranchText, newChar, npcToast, triggerAlert, statChangesLog, showStatChanges, showBattleReportModal, battleReport, isGeneratingReport, battleReportFilename, leftTab, treeContainerRef, treeLayout,
+            storyNodes, characters, currentNode, isEditMode, hpLabel, sanLabel, editData, newOptionText, newOptionTarget, showWorldviewModal, worldviewContent, showMemoryModal, memoryContent, showLorebookModal, lorebook, currentLore, aiGeneratedText, playerAction, actionType, isGeneratingText, checkpointCount, isRollingBack, goBack, isGeneratingOptions, isRecording, toggleVoiceInput, ttsPlaying, ttsVoice, ttsTone, ttsRate, ttsSpeak, imgPrompt, imgStyle, imgModel, isGeneratingImage, isLoadingImg, generatedImageUrl, imgEnPrompt, imgPromptUsed, imgLoadError, audioRef, tracks, currentTrackId, currentTrackUrl, customTrackUrl, isPlaying, volume, narrativeMood, timeSkipInput, forceNarrativeThrust, optionLikelihoods, fateSpinning, fateHighlightIdx, showTriggerModal, triggers, currentTrigger, condTypes, showCharModal, isGeneratingNPC, isExpandingBranch, expandingBranchText, newChar, npcToast, triggerAlert, passiveAlerts, statChangesLog, showStatChanges, showBattleReportModal, battleReport, isGeneratingReport, battleReportFilename, leftTab, treeContainerRef, treeLayout,
             // 时间线系统
             timelinePanelOpen, timelines, showTlEditModal, tlEditData, tlColorPresets,
             showTlMemoryModal, tlMemoryTarget, tlMemoryContent,
@@ -4767,9 +5070,9 @@ createApp({
             showRagModal, ragTab, ragDocuments, ragSelectedDoc, ragForm,
             ragIngesting, ragIngestResult, ragSearchQuery, ragSearching, ragSearchResults,
             ragUploadFile, ragDragOver, ragChunkSize, ragChunkOverlap, ragTopK,
-            openRagModal, ragImport, ragIngest, ragDeleteDoc, ragSearch,
+            openRagModal, ragImport, ragIngest, ragDeleteDoc, ragToggleHidden, ragSearch,
             ragHandleFileSelect, ragHandleDrop,
-            fetchCampaigns, loadAndStart, enterCurrentGame: enterCurrentGameWithTl, exportSave, doExportOverwrite, doExportNew, showExportModal, exportShowNameInput, exportNewName, currentSaveFolder, fetchGameState, jumpToNode, saveNodeChanges, createNewNode, deleteCurrentNode, addManualOption, deleteOption, saveStatLabels, saveCharacterState, createCharacter, deleteCharacter, generateNPC, resetNewChar, openWorldviewModal, saveWorldview, openMemoryModal, saveMemory, openLorebookModal, saveLore, deleteLore, fetchTriggers, openTriggerModal, newTrigger, selectTrigger, saveTrigger, deleteTrigger, resetTriggerFired, generateAIText, generateDynamicOptions, openBattleReportModal, generateBattleReport, downloadBattleReport, generateImage, togglePlay, changeTrack, doTimeSkip, doForceThrust, fatePick,
+            fetchCampaigns, loadAndStart, enterCurrentGame: enterCurrentGameWithTl, exportSave, doExportOverwrite, doExportNew, showExportModal, exportShowNameInput, exportNewName, currentSaveFolder, fetchGameState, jumpToNode, saveNodeChanges, createNewNode, deleteCurrentNode, addManualOption, deleteOption, saveStatLabels, saveCharacterState, createCharacter, deleteCharacter, generateNPC, resetNewChar, openWorldviewModal, saveWorldview, openMemoryModal, saveMemory, openLorebookModal, saveLore, deleteLore, fetchTriggers, openTriggerModal, newTrigger, selectTrigger, saveTrigger, deleteTrigger, resetTriggerFired, addTriggerAction, resetActionFields, resetAllTriggers, generateAIText, generateDynamicOptions, openBattleReportModal, generateBattleReport, downloadBattleReport, generateImage, togglePlay, changeTrack, doTimeSkip, doForceThrust, fatePick,
             // GM 干预
             gmCorrection, lastDynamicContext, retryWithCorrection,
             // NPC Persona
