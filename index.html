@@ -1751,7 +1751,7 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:14px; h
                 <div style="display:flex;justify-content:space-between;margin-top:auto;padding-top:16px;border-top:1px solid rgba(255,255,255,.06)">
                     <button v-if="currentTrigger.id" @click="deleteTrigger(currentTrigger.id)" class="btn btn-danger"><i class="ph ph-trash"></i></button>
                     <div v-else></div>
-                    <button @click="saveTrigger" :disabled="(!currentTrigger.target_node_id&&currentTrigger.mode!=='passive')||!currentTrigger.conditions||!currentTrigger.conditions.some(c=>c.value)" class="btn btn-danger" style="background:rgba(248,113,113,.12);border-color:rgba(248,113,113,.4);color:#f87171">
+                    <button @click="saveTrigger" :disabled="(!currentTrigger.target_node_id&&currentTrigger.mode!=='passive'&&!currentTrigger.actions?.some(a=>a.type==='gen_node'))||!currentTrigger.conditions||!currentTrigger.conditions.some(c=>c.value)" class="btn btn-danger" style="background:rgba(248,113,113,.12);border-color:rgba(248,113,113,.4);color:#f87171">
                         <i class="ph ph-floppy-disk"></i> 保存并挂载
                     </button>
                 </div>
@@ -1809,7 +1809,7 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:14px; h
     </div>
     <div v-if="triggerAlert.mode==='hard'" style="font-size:12px;font-weight:600;color:#e05c5c;margin-bottom:10px">强制拦截，3 秒后自动传送…</div>
     <div style="display:flex;justify-content:center;gap:12px">
-        <button v-if="triggerAlert.mode==='hard'" @click="jumpToNode(triggerAlert.target_node_id);triggerAlert=null" class="btn btn-danger">立即传送</button>
+        <button v-if="triggerAlert.mode==='hard'&&triggerAlert.target_node_id" @click="jumpToNode(triggerAlert.target_node_id);triggerAlert=null" class="btn btn-danger">立即传送</button>
         <button @click="triggerAlert=null" class="btn btn-ghost">{{ triggerAlert.mode==='hard'?'拦截取消':'收到' }}</button>
     </div>
 </div>
@@ -3260,7 +3260,8 @@ createApp({
                 return;
             }
             triggerAlert.value = fired; if(triggerAlertTimer) clearTimeout(triggerAlertTimer);
-            if(fired.mode==='hard') { triggerAlertTimer = setTimeout(()=>{ jumpToNode(fired.target_node_id); triggerAlert.value=null; }, 3000); }
+            // target_node_id=0 时（如 gen_node 触发器）不自动跳转，避免错误跳到节点0
+            if(fired.mode==='hard' && fired.target_node_id) { triggerAlertTimer = setTimeout(()=>{ jumpToNode(fired.target_node_id); triggerAlert.value=null; }, 3000); }
             else { triggerAlertTimer = setTimeout(()=>{triggerAlert.value=null;}, 8000); }
         };
         const statChangesLog = ref([]);
@@ -3896,7 +3897,7 @@ createApp({
         const selectTrigger = t => { const copy=JSON.parse(JSON.stringify(t)); if(!Array.isArray(copy.conditions)||!copy.conditions.length){if(copy.cond_type)copy.conditions=[{type:copy.cond_type,value:copy.cond_value||'',negate:false}];else copy.conditions=[];} if(!Array.isArray(copy.actions))copy.actions=[]; currentTrigger.value=copy; };
         const saveTrigger = async () => {
             const t = currentTrigger.value;
-            if ((!t.target_node_id && t.mode !== 'passive') || !t.conditions || !t.conditions.some(c => c.value)) return;
+            if ((!t.target_node_id && t.mode !== 'passive' && !t.actions?.some(a => a.type === 'gen_node')) || !t.conditions || !t.conditions.some(c => c.value)) return;
             const isNew = !t.id;
             const url = isNew ? `${API_BASE_URL}/api/game/trigger` : `${API_BASE_URL}/api/game/trigger/${t.id}`;
             const payload = { label: t.label||'触发器', target_node_id: t.target_node_id ? parseInt(t.target_node_id) : 0, mode: t.mode, conditions: _buildTree(t.conditions), cooldown: t.cooldown||0, max_fire_count: t.max_fire_count||0, actions: t.actions||[], prerequisite_trigger_ids: t.prerequisite_trigger_ids||[], exclude_trigger_ids: t.exclude_trigger_ids||[] };
@@ -4161,7 +4162,7 @@ createApp({
                     if(d.generated_nodes&&d.generated_nodes.length>0){
                         d.generated_nodes.forEach(gen=>{
                             storyNodes.value.push({id:gen.node_id,name:gen.node_name,summary:'',content:gen.node_content,expanded_content:'',options:[]});
-                            showTriggerAlert({trigger_id:gen.trigger_id,label:'AI生成：'+gen.node_name,mode:gen.mode,target_node_id:gen.node_id,target_node_name:gen.node_name,fire_count:1});
+                            showTriggerAlert({trigger_id:gen.trigger_id,label:'AI生成：'+gen.node_name,mode:gen.mode,target_node_id:gen.node_id,target_node_name:gen.node_name,fire_count:1,actions_log:gen.actions_log||[]});
                             if(gen.mode==='soft'&&currentNode.value&&currentNode.value.id===next.id){
                                 if(!currentNode.value.options)currentNode.value.options=[];
                                 currentNode.value.options.push({id:'gen_'+gen.node_id,text:'[AI生成] '+gen.node_name,next_node_id:gen.node_id,_trigger:true,_generated:true});

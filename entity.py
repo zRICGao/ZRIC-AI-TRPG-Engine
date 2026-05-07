@@ -62,6 +62,7 @@ class WorldEntityUpsertRequest(BaseModel):
     last_seen_by: str = ""
     state_desc: str = ""
     room_id: int | None = None
+    aliases: list = []
 
 class UpdatePersonaRequest(BaseModel):
     desc: str = ""
@@ -117,7 +118,12 @@ def get_world_entities_text(conn, *search_texts) -> str:
         memories = sd.get("memory", [])
         breakpoint_cfg = sd.get("breakpoint", {})
 
-        line = f"- [{tag}] {r['name']} | 位置：{r['location'] or '不明'} | 状态：{r['status']}"
+        try:
+            aliases = json.loads(r["aliases"] or "[]") if "aliases" in r.keys() else []
+        except (json.JSONDecodeError, TypeError):
+            aliases = []
+        alias_tag = f"（又称：{'、'.join(aliases[:3])}）" if aliases else ""
+        line = f"- [{tag}] {r['name']}{alias_tag} | 位置：{r['location'] or '不明'} | 状态：{r['status']}"
 
         if r["entity_type"] == "npc" and emo:
             trust = emo.get("trust", 0)
@@ -172,7 +178,7 @@ def ai_extract_and_upsert_entities(
     写入/更新时保留已有的 emotion 和 memory 数据。
     """
     existing = conn.execute(
-        "SELECT name, location, status, state_desc FROM world_entities"
+        "SELECT name, location, status, state_desc, aliases FROM world_entities"
     ).fetchall()
     existing_lines = []
     for r in existing[:20]:
@@ -184,21 +190,30 @@ def ai_extract_and_upsert_entities(
                 desc = raw
         else:
             desc = raw
-        existing_lines.append(f"- {r['name']}（{r['location']}，{r['status']}）：{desc}")
+        try:
+            aliases = json.loads(r["aliases"] or "[]")
+        except (json.JSONDecodeError, TypeError):
+            aliases = []
+        alias_str = f"，又称：{'、'.join(aliases)}" if aliases else ""
+        existing_lines.append(f"- {r['name']}{alias_str}（{r['location']}，{r['status']}）：{desc}")
     existing_block = "\n".join(existing_lines) or "（暂无已知实体）"
 
     prompt_sys = (
         "你是跑团世界状态追踪助手。根据本次剧情，提取所有被提及的命名实体（人物/地点/事件）。\n"
         "规则：\n"
         "1. 只提取有专有名字的实体，忽略泛指（'一个路人'、'几个守卫'）\n"
-        "2. 若实体已在【已知实体】中，更新其状态描述和位置\n"
-        "3. status 只能取：active / dead / moved / resolved / pending\n"
-        "4. state_desc 用一句话概括当前状态，含关键信息（比如'刚与A小队交谈过，知道密道入口'）\n"
-        "5. 若本次剧情没有涉及任何命名实体，返回 {\"entities\": []}\n\n"
-        f"【已知实体（请勿重复创建，应更新）】\n{existing_block}\n\n"
+        "2. 若实体已在【已知实体】中（含别名），更新其状态描述和位置，name 字段必须使用已知实体的规范名称\n"
+        "3. 【关键】若文本用外貌描述或昵称（如'眼睛男生'、'高个子'、'戴眼镜的'）指代已知实体，"
+        "请直接使用已知实体的规范名称，并将该描述词写入 aliases 列表\n"
+        "4. status 只能取：active / dead / moved / resolved / pending\n"
+        "5. state_desc 用一句话概括当前状态，含关键信息\n"
+        "6. aliases 填写本场景中出现的该实体别名/外貌描述词列表（不含规范名称本身），若无则填 []\n"
+        "7. 若本次剧情没有涉及任何命名实体，返回 {\"entities\": []}\n\n"
+        f"【已知实体（请勿重复创建，应更新；别名也可用于匹配）】\n{existing_block}\n\n"
         "返回严格 JSON（无 markdown）：\n"
-        '{"entities": [{"entity_type": "npc|location|event", "name": "名字", '
-        '"location": "当前所在地点", "status": "active", "state_desc": "一句话状态描述"}]}'
+        '{"entities": [{"entity_type": "npc|location|event", "name": "规范名称", '
+        '"location": "当前所在地点", "status": "active", "state_desc": "一句话状态描述", '
+        '"aliases": ["别名1", "别名2"]}]}'
     )
     prompt_user = (
         f"场景名：{scene_name}\n"
@@ -224,14 +239,51 @@ def ai_extract_and_upsert_entities(
             return
 
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+        # 预加载全部实体，供别名三路查找使用（避免循环内多次全表扫描）
+        all_rows = conn.execute(
+            "SELECT id, name, room_id, state_desc, aliases FROM world_entities"
+        ).fetchall()
+
+        def _find_by_alias(target_name: str, new_aliases: list):
+            """
+            三路别名查找：
+            路径1 - 精确名字匹配（已在外层做，这里不重复）
+            路径2 - target_name 出现在某实体的 aliases 里 → 找到规范名
+            路径3 - new_aliases 里的某项是已有实体的规范名 → 合并并把 target_name 当别名
+            返回 (canonical_name, row) 或 (target_name, None)
+            """
+            # 路径2：别人的 aliases 里有我的名字
+            for row in all_rows:
+                try:
+                    row_aliases = json.loads(row["aliases"] or "[]")
+                except (json.JSONDecodeError, TypeError):
+                    row_aliases = []
+                if target_name in row_aliases:
+                    return row["name"], row
+
+            # 路径3：我的 aliases 里有别人的规范名
+            for alias in new_aliases:
+                for row in all_rows:
+                    if row["name"] == alias:
+                        # 把 target_name 加入 new_aliases，以便后续写入实体
+                        if target_name not in new_aliases:
+                            new_aliases.append(target_name)
+                        return row["name"], row
+            return target_name, None
+
         for e in entities:
             name = str(e.get("name", "")).strip()[:60]
             if not name:
                 continue
-            etype      = str(e.get("entity_type", "npc"))[:20]
-            location   = str(e.get("location",    ""))[:80]
-            status     = str(e.get("status",       "active"))[:20]
-            new_desc   = str(e.get("state_desc",   ""))[:200]
+            etype    = str(e.get("entity_type", "npc"))[:20]
+            location = str(e.get("location",    ""))[:80]
+            status   = str(e.get("status",       "active"))[:20]
+            new_desc = str(e.get("state_desc",   ""))[:200]
+            new_aliases = [
+                str(a).strip()[:40] for a in e.get("aliases", [])
+                if isinstance(a, str) and str(a).strip() and str(a).strip() != name
+            ]
 
             # 自动匹配 room_id
             matched_room_id = None
@@ -243,10 +295,19 @@ def ai_extract_and_upsert_entities(
                 if room_match:
                     matched_room_id = room_match["id"]
 
+            # 路径1：精确名字匹配
             exists = conn.execute(
-                "SELECT id, room_id, state_desc FROM world_entities WHERE name=?", (name,)
+                "SELECT id, room_id, state_desc, aliases FROM world_entities WHERE name=?", (name,)
             ).fetchone()
+
+            # 路径2/3：别名匹配（仅在精确匹配失败时触发）
+            if not exists:
+                name, exists = _find_by_alias(name, new_aliases)
+                if exists:
+                    _log.info("别名匹配：将「%s」归并到已知实体「%s」", e.get("name"), name)
+
             if exists:
+                # 合并 state_desc（保留 emotion/memory/breakpoint）
                 old_raw = exists["state_desc"] or ""
                 if old_raw.strip().startswith("{"):
                     try:
@@ -258,13 +319,21 @@ def ai_extract_and_upsert_entities(
                 old_sd["desc"] = new_desc
                 final_sd = json.dumps(old_sd, ensure_ascii=False)
 
+                # 合并别名：去重保序
+                try:
+                    old_aliases = json.loads(exists["aliases"] or "[]")
+                except (json.JSONDecodeError, TypeError):
+                    old_aliases = []
+                merged = list(dict.fromkeys(old_aliases + new_aliases))
+                merged_aliases = json.dumps(merged, ensure_ascii=False)
+
                 final_room_id = exists["room_id"] if exists["room_id"] else matched_room_id
                 conn.execute(
                     "UPDATE world_entities "
-                    "SET location=?, status=?, state_desc=?, last_seen_by=?, updated_at=?, room_id=? "
+                    "SET location=?, status=?, state_desc=?, last_seen_by=?, updated_at=?, room_id=?, aliases=? "
                     "WHERE id=?",
                     (location, status, final_sd, timeline_label, now_str,
-                     final_room_id, exists["id"]),
+                     final_room_id, merged_aliases, exists["id"]),
                 )
             else:
                 initial_sd = json.dumps({
@@ -274,10 +343,11 @@ def ai_extract_and_upsert_entities(
                 }, ensure_ascii=False)
                 conn.execute(
                     "INSERT INTO world_entities "
-                    "(entity_type, name, location, status, last_seen_by, state_desc, updated_at, room_id) "
-                    "VALUES (?,?,?,?,?,?,?,?)",
+                    "(entity_type, name, location, status, last_seen_by, state_desc, updated_at, room_id, aliases) "
+                    "VALUES (?,?,?,?,?,?,?,?,?)",
                     (etype, name, location, status, timeline_label,
-                     initial_sd, now_str, matched_room_id),
+                     initial_sd, now_str, matched_room_id,
+                     json.dumps(new_aliases, ensure_ascii=False)),
                 )
         conn.commit()
     except Exception as e:
@@ -302,22 +372,29 @@ def list_world_entities():
 def upsert_world_entity(req: WorldEntityUpsertRequest):
     with safe_db() as conn:
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+        new_aliases = [str(a).strip()[:40] for a in req.aliases if str(a).strip()]
         existing = conn.execute(
-            "SELECT id FROM world_entities WHERE name=?", (req.name,)
+            "SELECT id, aliases FROM world_entities WHERE name=?", (req.name,)
         ).fetchone()
         if existing:
+            try:
+                old_aliases = json.loads(existing["aliases"] or "[]")
+            except (json.JSONDecodeError, TypeError):
+                old_aliases = []
+            merged = json.dumps(list(dict.fromkeys(old_aliases + new_aliases)), ensure_ascii=False)
             conn.execute(
                 "UPDATE world_entities SET entity_type=?, location=?, status=?, "
-                "last_seen_by=?, state_desc=?, updated_at=?, room_id=? WHERE id=?",
+                "last_seen_by=?, state_desc=?, updated_at=?, room_id=?, aliases=? WHERE id=?",
                 (req.entity_type, req.location, req.status,
-                 req.last_seen_by, req.state_desc, now_str, req.room_id, existing["id"])
+                 req.last_seen_by, req.state_desc, now_str, req.room_id, merged, existing["id"])
             )
         else:
             conn.execute(
                 "INSERT INTO world_entities (entity_type, name, location, status, "
-                "last_seen_by, state_desc, updated_at, room_id) VALUES (?,?,?,?,?,?,?,?)",
+                "last_seen_by, state_desc, updated_at, room_id, aliases) VALUES (?,?,?,?,?,?,?,?,?)",
                 (req.entity_type, req.name, req.location, req.status,
-                 req.last_seen_by, req.state_desc, now_str, req.room_id)
+                 req.last_seen_by, req.state_desc, now_str, req.room_id,
+                 json.dumps(new_aliases, ensure_ascii=False))
             )
         conn.commit()
     return {"status": "success"}

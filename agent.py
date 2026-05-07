@@ -923,10 +923,19 @@ def apply_branch_effects(req: ApplyBranchEffectsRequest):
             npc_san = int(npc_data.get("san", 60))
             npc_inv = npc_data.get("inventory", "")[:200]
             npc_back = npc_data.get("backstory", "")
-            cur = conn.execute(
-                "INSERT INTO characters (name, role, hp, san, inventory) VALUES (?, 'NPC', ?, ?, ?)",
-                (npc_name, npc_hp, npc_san, npc_inv))
-            spawned_npc = {"id": cur.lastrowid, "name": npc_name, "role": "NPC",
+            _existing_npc = conn.execute(
+                "SELECT id FROM characters WHERE name=?", (npc_name,)
+            ).fetchone()
+            if _existing_npc:
+                conn.execute(
+                    "UPDATE characters SET hp=?, san=?, inventory=? WHERE id=?",
+                    (npc_hp, npc_san, npc_inv, _existing_npc["id"]))
+                npc_id = _existing_npc["id"]
+            else:
+                npc_id = conn.execute(
+                    "INSERT INTO characters (name, role, hp, san, inventory) VALUES (?, 'NPC', ?, ?, ?)",
+                    (npc_name, npc_hp, npc_san, npc_inv)).lastrowid
+            spawned_npc = {"id": npc_id, "name": npc_name, "role": "NPC",
                            "hp": npc_hp, "san": npc_san, "inventory": npc_inv, "backstory": npc_back}
             mem_text = f"NPC [{npc_name}] 登场于 [{scene_name}]。{npc_back}"
             if tl_id_for_memory and _tl_append_memory:
@@ -1740,11 +1749,20 @@ NPC 背景：{current_desc}
                 memories = memories[-NPC_MEMORY_KEEP:]
             sd["memory"] = memories
 
+        ts = __import__('datetime').datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         conn.execute(
             "UPDATE world_entities SET state_desc=?, updated_at=? WHERE id=?",
-            (json.dumps(sd, ensure_ascii=False),
-             __import__('datetime').datetime.now().strftime("%Y-%m-%d %H:%M"),
-             entity_row["id"])
+            (json.dumps(sd, ensure_ascii=False), ts, entity_row["id"])
+        )
+
+        # 持久化本轮对话消息
+        conn.execute(
+            "INSERT INTO npc_chat_logs (npc_name, sender, message, created_at) VALUES (?,?,?,?)",
+            (request.npc_name, "player", request.player_message, ts)
+        )
+        conn.execute(
+            "INSERT INTO npc_chat_logs (npc_name, sender, message, created_at) VALUES (?,?,?,?)",
+            (request.npc_name, "npc", request.npc_reply, ts)
         )
         conn.commit()
 
@@ -1754,3 +1772,15 @@ NPC 背景：{current_desc}
         "trust_delta": trust_d, "fear_delta": fear_d, "irritation_delta": irr_d,
         "memory_added": memory_text,
     }
+
+
+@agent_router.get("/api/ai/npc-chat/history")
+def npc_chat_history(npc_name: str, limit: int = 200):
+    """读取指定 NPC 的历史聊天记录，供前端打开手机界面时恢复。"""
+    with safe_db() as conn:
+        rows = conn.execute(
+            "SELECT sender, message, created_at FROM npc_chat_logs "
+            "WHERE npc_name=? ORDER BY id DESC LIMIT ?",
+            (npc_name, limit)
+        ).fetchall()
+    return {"status": "ok", "logs": list(reversed([dict(r) for r in rows]))}

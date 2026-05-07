@@ -102,6 +102,10 @@ def _ensure_schema():
             "CREATE INDEX IF NOT EXISTS idx_judge_trigger "
             "ON trigger_judgements(trigger_id)"
         )
+        try:
+            conn.execute("ALTER TABLE trigger_judgements ADD COLUMN condition_hash TEXT")
+        except sqlite3.OperationalError:
+            pass  # 列已存在
 
         # game_flags 表：供 set_flag 动作读写命名状态位
         conn.execute("""
@@ -515,6 +519,7 @@ def _execute_actions(actions_raw: str, conn, trigger_id: int,
         "option_injections": [],  # [{node_id, option_id, text, next_node_id}]
         "generated_nodes":  [],   # [{trigger_id, node_id, node_name, node_content, mode}]
         "log":              [],   # [str] 人类可读的动作执行摘要，下发给前端显示
+        "reveal_rag_ids":   [],   # [int] reveal_rag 解锁的 doc_id，commit 后刷新向量缓存
     }
 
     try:
@@ -849,8 +854,7 @@ def _execute_actions(actions_raw: str, conn, trigger_id: int,
                         "UPDATE rag_documents SET hidden=0 WHERE id=?",
                         (doc_id,)
                     )
-                    conn.commit()
-                    refresh_vector_cache()
+                    side_effects["reveal_rag_ids"].append(doc_id)
                     _log.info("触发器 %d reveal_rag: doc_id=%d 已解锁", trigger_id, doc_id)
                     title = row["title"] if row else f"#{doc_id}"
                     side_effects["log"].append(f"🔓 RAG 文档「{title}」已解锁并载入向量库")
@@ -859,6 +863,16 @@ def _execute_actions(actions_raw: str, conn, trigger_id: int,
             _log.warning("触发器 %d action[%s] 执行失败: %s", trigger_id, atype, e)
 
     return side_effects
+
+
+def _has_gen_node_action(actions) -> bool:
+    """动作列表中含有 gen_node 时，跳转目标由 AI 运行时生成，无需固定 target_node_id。"""
+    if isinstance(actions, str):
+        try:
+            actions = json.loads(actions)
+        except (json.JSONDecodeError, TypeError):
+            return False
+    return any(isinstance(a, dict) and a.get("type") == "gen_node" for a in (actions or []))
 
 
 # ---------------------------------------------------------
@@ -958,7 +972,7 @@ def get_triggers():
 @trigger_router.post("/api/game/trigger")
 def create_trigger(req: TriggerCreateRequest):
     with safe_db() as conn:
-        if req.target_node_id and req.mode != "passive":
+        if req.target_node_id and req.mode != "passive" and not _has_gen_node_action(req.actions):
             if not conn.execute("SELECT id FROM nodes WHERE id=?", (req.target_node_id,)).fetchone():
                 raise fastapi.HTTPException(status_code=400, detail="目标节点不存在")
         conditions_json = _normalize_conditions(req)
@@ -982,7 +996,7 @@ def create_trigger(req: TriggerCreateRequest):
 @trigger_router.put("/api/game/trigger/{tid}")
 def update_trigger(tid: int, req: TriggerUpdateRequest):
     with safe_db() as conn:
-        if req.target_node_id and req.mode != "passive":
+        if req.target_node_id and req.mode != "passive" and not _has_gen_node_action(req.actions):
             if not conn.execute("SELECT id FROM nodes WHERE id=?", (req.target_node_id,)).fetchone():
                 raise fastapi.HTTPException(status_code=400, detail="目标节点不存在")
         conditions_json = _normalize_conditions(req)
@@ -1048,9 +1062,12 @@ def check_triggers(req: CheckTriggersRequest):
     """检查所有符合条件的触发器（DAG 条件树）。"""
     conn = get_db_connection()
     try:
-        # 取未永久封锁的触发器（fired=0 或 cooldown>0 允许重复触发）
+        # 取未永久封锁的触发器：
+        # - fired=0：从未触发或无冷却可用
+        # - cooldown>0 AND 未达 max_fire 上限：可重复触发
         pending = conn.execute(
-            "SELECT * FROM triggers WHERE fired=0 OR cooldown>0"
+            "SELECT * FROM triggers WHERE fired=0 "
+            "OR (cooldown>0 AND (max_fire_count=0 OR fire_count < max_fire_count))"
         ).fetchall()
         if not pending:
             conn.close()
@@ -1064,6 +1081,7 @@ def check_triggers(req: CheckTriggersRequest):
         text_injections  = []
         option_injections = []
         generated_nodes  = []
+        any_reveal_rag   = False
 
         for t in pending:
             if not _check_trigger(t, req.scene_id, req.scene_name,
@@ -1078,6 +1096,12 @@ def check_triggers(req: CheckTriggersRequest):
             )
             text_injections.extend(side["text_injections"])
             option_injections.extend(side["option_injections"])
+            if side["reveal_rag_ids"]:
+                any_reveal_rag = True
+
+            # gen_node 条目携带 actions_log，供前端在生成节点 toast 中展示
+            for gn in side["generated_nodes"]:
+                gn["actions_log"] = side["log"]
             generated_nodes.extend(side["generated_nodes"])
 
             # ── 更新触发状态 ─────────────────────────────────────────────────
@@ -1099,30 +1123,38 @@ def check_triggers(req: CheckTriggersRequest):
             )
 
             # ── 构建结果条目 ─────────────────────────────────────────────────
-            target_node = conn.execute(
-                "SELECT * FROM nodes WHERE id=?", (t["target_node_id"],)
-            ).fetchone() if t["target_node_id"] else None
+            # gen_node 触发器：跳转通知走 generated_nodes 通道，避免双重弹窗
+            # 且 target_node_id=0，fired_results 里的 hard 模式会错误跳转到节点0
+            if not side["generated_nodes"]:
+                target_node = conn.execute(
+                    "SELECT * FROM nodes WHERE id=?", (t["target_node_id"],)
+                ).fetchone() if t["target_node_id"] else None
 
-            fired_results.append({
-                "trigger_id":       t["id"],
-                "label":            t["label"],
-                "mode":             t["mode"],
-                "target_node_id":   t["target_node_id"],
-                "target_node_name": target_node["name"] if target_node else "（无跳转目标）",
-                "fire_count":       new_count,
-                "actions_log":      side["log"],
-            })
+                fired_results.append({
+                    "trigger_id":       t["id"],
+                    "label":            t["label"],
+                    "mode":             t["mode"],
+                    "target_node_id":   t["target_node_id"],
+                    "target_node_name": target_node["name"] if target_node else "（无跳转目标）",
+                    "fire_count":       new_count,
+                    "actions_log":      side["log"],
+                })
 
             # passive 模式不写导航记忆，其他模式保留系统审计记录
             if t["mode"] != "passive" and _fn_append_to_memory:
+                if side["generated_nodes"]:
+                    node_ref = f"AI生成节点[{side['generated_nodes'][0]['node_id']}]"
+                else:
+                    node_ref = f"节点[{t['target_node_id']}]"
                 _fn_append_to_memory(
                     conn,
-                    f"关键触发器「{t['label']}」已触发（第{new_count}次），"
-                    f"剧情指向节点[{t['target_node_id']}]。"
+                    f"关键触发器「{t['label']}」已触发（第{new_count}次），剧情指向{node_ref}。"
                 )
 
         conn.commit()
         conn.close()
+        if any_reveal_rag:
+            refresh_vector_cache()
         return {
             "status":           "success",
             "fired":            fired_results,

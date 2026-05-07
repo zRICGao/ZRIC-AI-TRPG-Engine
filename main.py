@@ -335,11 +335,26 @@ def init_db():
     # 平滑升级：world_entities 加 room_id（实体坐标化）
     try: cursor.execute("ALTER TABLE world_entities ADD COLUMN room_id INTEGER")
     except sqlite3.OperationalError: pass
+    # 平滑升级：world_entities 加 aliases（别名/描述词列表，用于同一实体多名称匹配）
+    try: cursor.execute("ALTER TABLE world_entities ADD COLUMN aliases TEXT NOT NULL DEFAULT '[]'")
+    except sqlite3.OperationalError: pass
     # 平滑升级：timelines 加 current_room_id（时间线坐标）
     try: cursor.execute("ALTER TABLE timelines ADD COLUMN current_room_id INTEGER")
     except sqlite3.OperationalError: pass
     # 平滑升级：nodes 加 expanded_content 字段（AI扩写叙事持久化）
     try: cursor.execute("ALTER TABLE nodes ADD COLUMN expanded_content TEXT DEFAULT ''")
+    except sqlite3.OperationalError: pass
+
+    # 【手机聊天记录】：NPC 私聊消息持久化
+    cursor.execute('''CREATE TABLE IF NOT EXISTS npc_chat_logs (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        npc_name   TEXT    NOT NULL,
+        sender     TEXT    NOT NULL CHECK(sender IN ('player','npc')),
+        message    TEXT    NOT NULL,
+        created_at TEXT    NOT NULL DEFAULT (datetime('now','localtime'))
+    )''')
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_npc_chat_npc ON npc_chat_logs(npc_name)")
+    try: cursor.execute("ALTER TABLE npc_chat_logs ADD COLUMN created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))")
     except sqlite3.OperationalError: pass
 
     # 【时间回溯】：游戏状态快照表，保留最近10条
@@ -528,7 +543,7 @@ def load_campaign(req: LoadCampaignRequest):
                     "lorebook", "triggers", "timelines", "world_entities",
                     "map_rooms", "map_edges",
                     "rag_documents", "rag_chunks",
-                    "memory_l1", "pending_effects"):
+                    "memory_l1", "pending_effects", "npc_chat_logs"):
             try:
                 cursor.execute(f"DELETE FROM {tbl}")
             except sqlite3.OperationalError:
@@ -539,7 +554,7 @@ def load_campaign(req: LoadCampaignRequest):
                     "triggers", "timelines", "world_entities",
                     "map_rooms", "map_edges",
                     "rag_documents", "rag_chunks",
-                    "memory_l1", "pending_effects"):
+                    "memory_l1", "pending_effects", "npc_chat_logs"):
             try:
                 cursor.execute(
                     "UPDATE sqlite_sequence SET seq=0 WHERE name=?", (tbl,)
@@ -663,6 +678,14 @@ def load_campaign(req: LoadCampaignRequest):
             cursor.execute(
                 "INSERT INTO pending_effects (node_id, payload) VALUES (?,?)",
                 (pe.get("node_id"), pe.get("payload", "{}"))
+            )
+
+        # ── 还原 npc_chat_logs ──────────────────────────────────────
+        for log in config.get("npc_chat_logs", []):
+            cursor.execute(
+                "INSERT INTO npc_chat_logs (npc_name, sender, message, created_at) VALUES (?,?,?,?)",
+                (log.get("npc_name", ""), log.get("sender", "player"),
+                 log.get("message", ""), log.get("created_at", ""))
             )
 
         # ── 还原 RAG 知识库 ────────────────────────────────────
@@ -809,6 +832,7 @@ def export_campaign(req: ExportSaveRequest = ExportSaveRequest()):
         })
     memory_l1 = [dict(row) for row in conn.execute("SELECT * FROM memory_l1").fetchall()]
     pending_effects = [dict(row) for row in conn.execute("SELECT * FROM pending_effects").fetchall()]
+    npc_chat_logs = [dict(row) for row in conn.execute("SELECT npc_name, sender, message, created_at FROM npc_chat_logs ORDER BY id").fetchall()]
     conn.close()
 
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -830,6 +854,7 @@ def export_campaign(req: ExportSaveRequest = ExportSaveRequest()):
             "rag_library": rag_export,
             "memory_l1": memory_l1,
             "pending_effects": pending_effects,
+            "npc_chat_logs": npc_chat_logs,
         }
         with open(os.path.join(folder_path, "campaign.json"), "w", encoding="utf-8") as f:
             json.dump(campaign_data, f, ensure_ascii=False, indent=4)
@@ -1213,11 +1238,20 @@ def _get_current_room_id(conn, timeline_id: int | None = None) -> int | None:
 @app.post("/api/game/character")
 def create_character(req: CharCreateRequest):
     with safe_db() as conn:
-        cursor = conn.execute(
-            "INSERT INTO characters (name, role, hp, san, inventory, status) VALUES (?, ?, ?, ?, ?, ?)",
-            (req.name[:50], req.role[:10], req.hp, req.san, req.inventory[:200], req.status)
-        )
-        new_id = cursor.lastrowid
+        _existing_char = conn.execute(
+            "SELECT id FROM characters WHERE name=?", (req.name[:50],)
+        ).fetchone()
+        if _existing_char:
+            conn.execute(
+                "UPDATE characters SET role=?, hp=?, san=?, inventory=?, status=? WHERE id=?",
+                (req.role[:10], req.hp, req.san, req.inventory[:200], req.status, _existing_char["id"])
+            )
+            new_id = _existing_char["id"]
+        else:
+            new_id = conn.execute(
+                "INSERT INTO characters (name, role, hp, san, inventory, status) VALUES (?, ?, ?, ?, ?, ?)",
+                (req.name[:50], req.role[:10], req.hp, req.san, req.inventory[:200], req.status)
+            ).lastrowid
         # NPC 自动创建世界实体条目（使情绪状态机可用）
         if req.role.upper() == 'NPC':
             existing = conn.execute("SELECT id FROM world_entities WHERE name=?", (req.name[:50],)).fetchone()
@@ -1288,11 +1322,16 @@ def generate_npc(request: AutoNPCRequest):
         backstory = npc_data.get("backstory", "")
 
         conn2 = get_db_connection()
-        cursor = conn2.execute(
-            "INSERT INTO characters (name, role, hp, san, inventory) VALUES (?, 'NPC', ?, ?, ?)",
-            (name, hp, san, inv)
-        )
-        new_id = cursor.lastrowid
+        _existing = conn2.execute("SELECT id FROM characters WHERE name=?", (name,)).fetchone()
+        if _existing:
+            conn2.execute(
+                "UPDATE characters SET hp=?, san=?, inventory=? WHERE id=?",
+                (hp, san, inv, _existing["id"]))
+            new_id = _existing["id"]
+        else:
+            new_id = conn2.execute(
+                "INSERT INTO characters (name, role, hp, san, inventory) VALUES (?, 'NPC', ?, ?, ?)",
+                (name, hp, san, inv)).lastrowid
         append_to_memory(conn2, f"NPC [{name}] 登场于 [{request.scene_name}]。背景：{backstory}")
         conn2.commit()
         conn2.close()
