@@ -289,10 +289,10 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:14px; h
                 <label class="tag" style="display:block;margin-bottom:8px">
                     <i class="ph ph-robot" style="font-size:13px"></i> AI 推演模型
                 </label>
-                <div style="display:flex;gap:8px">
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
                     <button v-for="m in aiModels" :key="m.key"
                             @click="switchAiModel(m.key)" :disabled="!m.available"
-                            class="btn btn-sm" style="flex:1;padding:10px 14px;font-size:13px;transition:all .15s"
+                            class="btn btn-sm" style="padding:9px 12px;font-size:13px;transition:all .15s;justify-content:flex-start;min-width:0"
                             :style="activeAiModel===m.key
                                 ? {background:`rgba(${modelAccentRgb(m.key)},.12)`,
                                    borderColor:`rgba(${modelAccentRgb(m.key)},.4)`,
@@ -300,11 +300,11 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:14px; h
                                    boxShadow:`0 0 12px rgba(${modelAccentRgb(m.key)},.15)`}
                                 : {background:'#090b10', borderColor:'rgba(255,255,255,.07)', color: m.available ? '#6b7280' : '#374151'}">
                         <i :class="modelIcon(m.key)"
-                           style="font-size:15px;margin-right:6px"
+                           style="font-size:14px;flex-shrink:0"
                            :style="{opacity: m.available ? 1 : 0.3}"></i>
-                        <span>{{ m.label }}</span>
-                        <span v-if="!m.available" style="font-size:10px;margin-left:4px;opacity:.5">(未配置)</span>
-                        <span v-if="activeAiModel===m.key" style="font-size:10px;margin-left:6px;background:rgba(255,255,255,.08);padding:1px 6px;border-radius:3px">当前</span>
+                        <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-left:5px">{{ m.label }}</span>
+                        <span v-if="!m.available" style="font-size:10px;margin-left:4px;opacity:.5;flex-shrink:0">(未配置)</span>
+                        <span v-if="activeAiModel===m.key" style="font-size:10px;margin-left:auto;padding-left:4px;background:rgba(255,255,255,.08);padding:1px 5px;border-radius:3px;flex-shrink:0">当前</span>
                     </button>
                 </div>
                 <div style="font-size:11px;color:#4b5563;margin-top:6px;padding-left:2px">
@@ -321,6 +321,129 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:14px; h
             <button @click="enterCurrentGame" class="btn btn-ghost" style="width:100%;font-size:13px">
                 <i class="ph ph-arrow-clockwise"></i> 恢复当前会话
             </button>
+
+            <!-- ── API Key 配置入口 ── -->
+            <div style="margin-top:20px;border-top:1px solid rgba(255,255,255,.06);padding-top:16px">
+                <button @click="showApiKeyPanel=true"
+                        class="btn btn-ghost btn-sm" style="width:100%;justify-content:space-between;padding:8px 10px">
+                    <span style="display:flex;align-items:center;gap:6px">
+                        <i class="ph ph-key" style="font-size:14px"></i>
+                        <span>API Key 配置</span>
+                        <span v-if="apiKeysMissing" style="font-size:10px;background:rgba(224,92,92,.15);border:1px solid rgba(224,92,92,.3);color:#e05c5c;padding:1px 7px;border-radius:10px;margin-left:2px">未配置</span>
+                        <span v-else style="font-size:10px;background:rgba(79,201,138,.1);border:1px solid rgba(79,201,138,.3);color:#4fc98a;padding:1px 7px;border-radius:10px;margin-left:2px">已配置</span>
+                    </span>
+                    <i class="ph ph-arrow-right" style="font-size:13px;opacity:.4"></i>
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════
+     API Key 配置模态
+══════════════════════════════════════════════════════════════ -->
+<div v-if="showApiKeyPanel"
+     style="position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.6);backdrop-filter:blur(4px)"
+     @click.self="showApiKeyPanel=false">
+    <div class="panel" style="width:480px;border-radius:12px;box-shadow:0 32px 80px rgba(0,0,0,.6);display:flex;flex-direction:column;max-height:90vh">
+        <!-- 标题栏 -->
+        <div style="padding:20px 24px 16px;border-bottom:1px solid rgba(255,255,255,.06);display:flex;align-items:center;justify-content:space-between;flex-shrink:0">
+            <div style="display:flex;align-items:center;gap:10px">
+                <div style="width:32px;height:32px;background:rgba(232,180,75,.1);border:1px solid rgba(232,180,75,.25);border-radius:8px;display:flex;align-items:center;justify-content:center">
+                    <i class="ph ph-key" style="font-size:16px;color:#e8b44b"></i>
+                </div>
+                <div>
+                    <div style="font-size:15px;font-weight:600;color:#c9cdd6">API Key 配置</div>
+                    <div style="font-size:11px;color:#4b5563;margin-top:1px">密钥保存至本地 .env，不上传</div>
+                </div>
+            </div>
+            <button @click="showApiKeyPanel=false" class="btn btn-ghost btn-icon" style="width:30px;height:30px;padding:0">
+                <i class="ph ph-x" style="font-size:15px"></i>
+            </button>
+        </div>
+
+        <!-- 内容区（可滚动） -->
+        <div style="padding:20px 24px;overflow-y:auto;display:flex;flex-direction:column;gap:16px">
+
+            <!-- DeepSeek -->
+            <div>
+                <label class="tag" style="display:flex;align-items:center;gap:6px;margin-bottom:7px">
+                    <i class="ph ph-lightning" style="font-size:12px;color:#38bdf8"></i>
+                    DeepSeek API Key
+                    <span style="font-size:10px;color:#e05c5c;font-weight:500">必填</span>
+                    <span v-if="apiKeyStatus.deepseek" style="margin-left:auto;font-size:10px;color:#4fc98a;display:flex;align-items:center;gap:3px">
+                        <i class="ph ph-check-circle" style="font-size:12px"></i> 已配置
+                    </span>
+                    <span v-else style="margin-left:auto;font-size:10px;color:#e05c5c;display:flex;align-items:center;gap:3px">
+                        <i class="ph ph-warning-circle" style="font-size:12px"></i> 未配置
+                    </span>
+                </label>
+                <input v-model="apiKeyInputs.deepseek" type="password" class="inp inp-mono"
+                       :placeholder="apiKeyStatus.deepseek ? '已配置，输入新值以覆盖' : 'sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'"
+                       style="font-size:12px">
+            </div>
+
+            <!-- 硅基流动 -->
+            <div>
+                <label class="tag" style="display:flex;align-items:center;gap:6px;margin-bottom:7px">
+                    <i class="ph ph-globe" style="font-size:12px;color:#a78bfa"></i>
+                    硅基流动 API Key
+                    <span style="font-size:10px;color:#e05c5c;font-weight:500">必填（RAG / 图像）</span>
+                    <span v-if="apiKeyStatus.siliconflow" style="margin-left:auto;font-size:10px;color:#4fc98a;display:flex;align-items:center;gap:3px">
+                        <i class="ph ph-check-circle" style="font-size:12px"></i> 已配置
+                    </span>
+                    <span v-else style="margin-left:auto;font-size:10px;color:#e05c5c;display:flex;align-items:center;gap:3px">
+                        <i class="ph ph-warning-circle" style="font-size:12px"></i> 未配置
+                    </span>
+                </label>
+                <input v-model="apiKeyInputs.siliconflow" type="password" class="inp inp-mono"
+                       :placeholder="apiKeyStatus.siliconflow ? '已配置，输入新值以覆盖' : 'sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'"
+                       style="font-size:12px">
+            </div>
+
+            <!-- 豆包 -->
+            <div>
+                <label class="tag" style="display:flex;align-items:center;gap:6px;margin-bottom:7px">
+                    <i class="ph ph-shooting-star" style="font-size:12px;color:#fb923c"></i>
+                    豆包 API Key
+                    <span style="font-size:10px;color:#fb923c;background:rgba(251,146,60,.1);border:1px solid rgba(251,146,60,.3);padding:0 5px;border-radius:4px">推荐</span>
+                    <span style="font-size:10px;color:#6b7280">可选（付费图像生成）</span>
+                    <span v-if="apiKeyStatus.doubao" style="margin-left:auto;font-size:10px;color:#4fc98a;display:flex;align-items:center;gap:3px">
+                        <i class="ph ph-check-circle" style="font-size:12px"></i> 已配置
+                    </span>
+                </label>
+                <input v-model="apiKeyInputs.doubao" type="password" class="inp inp-mono"
+                       :placeholder="apiKeyStatus.doubao ? '已配置，输入新值以覆盖' : 'ark-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'"
+                       style="font-size:12px">
+            </div>
+
+            <!-- Anthropic -->
+            <div>
+                <label class="tag" style="display:flex;align-items:center;gap:6px;margin-bottom:7px">
+                    <i class="ph ph-brain" style="font-size:12px;color:#a78bfa"></i>
+                    Anthropic API Key
+                    <span style="font-size:10px;color:#6b7280">可选（Claude Opus）</span>
+                    <span v-if="apiKeyStatus.anthropic" style="margin-left:auto;font-size:10px;color:#4fc98a;display:flex;align-items:center;gap:3px">
+                        <i class="ph ph-check-circle" style="font-size:12px"></i> 已配置
+                    </span>
+                </label>
+                <input v-model="apiKeyInputs.anthropic" type="password" class="inp inp-mono"
+                       :placeholder="apiKeyStatus.anthropic ? '已配置，输入新值以覆盖' : 'sk-ant-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'"
+                       style="font-size:12px">
+            </div>
+        </div>
+
+        <!-- 底部操作栏 -->
+        <div style="padding:16px 24px;border-top:1px solid rgba(255,255,255,.06);display:flex;align-items:center;gap:10px;flex-shrink:0">
+            <button @click="saveApiKeys" :disabled="isSavingKeys" class="btn btn-ok" style="flex:1">
+                <i v-if="isSavingKeys" class="ph ph-circle-notch" style="animation:spin 1s linear infinite"></i>
+                <i v-else class="ph ph-floppy-disk"></i>
+                {{ isSavingKeys ? '保存中…' : '保存并生效' }}
+            </button>
+            <button @click="showApiKeyPanel=false" class="btn btn-ghost" style="flex:0 0 auto;padding:8px 20px">取消</button>
+            <span v-if="apiKeySaveMsg" style="font-size:12px;white-space:nowrap" :style="{color: apiKeySaveOk ? '#4fc98a' : '#e05c5c'}">
+                {{ apiKeySaveMsg }}
+            </span>
         </div>
     </div>
 </div>
@@ -861,7 +984,7 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:14px; h
                     <div v-if="!isEditMode">
                         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
                             <span class="tag" style="display:flex;align-items:center;gap:6px;color:rgba(232,180,75,.8)">
-                                <i class="ph-fill ph-lightning" style="font-size:14px"></i> 玩家意外行动与动态推演
+                                <i class="ph-fill ph-lightning" style="font-size:14px"></i> 玩家行动与动态推演
                             </span>
                             <!-- 动作经济 Toggle -->
                             <div style="display:flex;align-items:center;background:#090b10;border:1px solid rgba(255,255,255,.07);border-radius:6px;overflow:hidden">
@@ -950,11 +1073,11 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:14px; h
                                   :style="{background:char.role==='NPC'?'rgba(251,191,36,.1)':'rgba(147,197,253,.1)',color:char.role==='NPC'?'#92711d':'#3b6e8f',border:char.role==='NPC'?'1px solid rgba(251,191,36,.2)':'1px solid rgba(147,197,253,.2)'}">
                                 {{ char.role }}
                             </span>
-                            <span v-if="char.inventory && char.inventory.match(/\[[A-Z]{4}/)"
+                            <span v-if="char.personality && char.personality.match(/\[[A-Z]{4}/)"
                                   style="font-family:'JetBrains Mono';font-size:9px;padding:2px 5px;border-radius:3px;font-weight:600;background:rgba(192,132,252,.1);border:1px solid rgba(192,132,252,.2);color:#c084fc;cursor:pointer"
                                   @click="openPersonaModalFull(char)"
-                                  :title="char.inventory.match(/\[([^\]]+)\]/)?.[1] || ''">
-                                {{ char.inventory.match(/\[([A-Z]{4})/)?.[1] || '🎭' }}
+                                  :title="char.personality.match(/\[([^\]]+)\]/)?.[1] || ''">
+                                {{ char.personality.match(/\[([A-Z]{4})/)?.[1] || '🎭' }}
                             </span>
                         </div>
                         <div style="display:flex;gap:2px;align-items:center">
@@ -974,12 +1097,17 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:14px; h
                             <button @click="openPersonaModalFull(char)" class="btn btn-ghost btn-sm" style="padding:4px" title="编辑性格档案">
                                 <i class="ph ph-user-focus" style="font-size:14px;color:#c084fc"></i>
                             </button>
+                            <button @click="toggleCharCollapse(char.id)" class="btn btn-ghost btn-sm" style="padding:4px;opacity:.5" :title="collapsedChars[char.id]?'展开':'折叠'">
+                                <i :class="collapsedChars[char.id]?'ph ph-caret-down':'ph ph-caret-up'" style="font-size:13px"></i>
+                            </button>
                             <button @click="deleteCharacter(char.id)" class="btn btn-ghost btn-sm" style="padding:4px;opacity:.4">
                                 <i class="ph ph-trash" style="font-size:13px"></i>
                             </button>
                         </div>
                     </div>
 
+                    <!-- 折叠体：HP/SAN + 物品 + 情绪 -->
+                    <div v-show="!collapsedChars[char.id]">
                     <!-- HP / SAN（标签可自定义） -->
                     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
                         <div style="background:#090b10;border:1px solid rgba(224,92,92,.15);border-radius:4px;padding:8px 10px">
@@ -1038,6 +1166,7 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:14px; h
                             </div>
                         </div>
                     </template>
+                    </div><!-- /折叠体 -->
                 </div>
 
                 <div v-if="!characters.length" style="text-align:center;color:#374151;font-size:13px;padding:32px 0">
@@ -1809,7 +1938,7 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:14px; h
     </div>
     <div v-if="triggerAlert.mode==='hard'" style="font-size:12px;font-weight:600;color:#e05c5c;margin-bottom:10px">强制拦截，3 秒后自动传送…</div>
     <div style="display:flex;justify-content:center;gap:12px">
-        <button v-if="triggerAlert.mode==='hard'&&triggerAlert.target_node_id" @click="jumpToNode(triggerAlert.target_node_id);triggerAlert=null" class="btn btn-danger">立即传送</button>
+        <button v-if="triggerAlert.mode==='hard'&&triggerAlert.target_node_id" @click="jumpToNode(triggerAlert.target_node_id,triggerAlert.target_node_name);triggerAlert=null" class="btn btn-danger">立即传送</button>
         <button @click="triggerAlert=null" class="btn btn-ghost">{{ triggerAlert.mode==='hard'?'拦截取消':'收到' }}</button>
     </div>
 </div>
@@ -3045,6 +3174,74 @@ createApp({
         const isLoading = ref(false);
         const dbConnected = ref(false);
         const campaignFiles = ref([]);
+
+        // ── API Key 配置 ──
+        const showApiKeyPanel = ref(false);
+        const apiKeyStatus = ref({ deepseek: false, siliconflow: false, anthropic: false, doubao: false });
+        const apiKeyInputs = ref({ deepseek: '', siliconflow: '', anthropic: '', doubao: '' });
+        const apiKeysMissing = computed(() => !apiKeyStatus.value.deepseek || !apiKeyStatus.value.siliconflow);
+        const isSavingKeys = ref(false);
+        const apiKeySaveMsg = ref('');
+        const apiKeySaveOk = ref(true);
+
+        const fetchApiKeyStatus = async () => {
+            try {
+                const r = await fetch(`${API_BASE_URL}/api/config/keys`);
+                const d = await r.json();
+                if (d.status === 'success') {
+                    apiKeyStatus.value = {
+                        deepseek:    d.keys.deepseek?.configured    || false,
+                        siliconflow: d.keys.siliconflow?.configured || false,
+                        anthropic:   d.keys.anthropic?.configured   || false,
+                        doubao:      d.keys.doubao?.configured      || false,
+                    };
+                    if (!apiKeyStatus.value.deepseek || !apiKeyStatus.value.siliconflow) {
+                        showApiKeyPanel.value = true;
+                    }
+                }
+            } catch(e) {}
+        };
+
+        const saveApiKeys = async () => {
+            isSavingKeys.value = true;
+            apiKeySaveMsg.value = '';
+            try {
+                const r = await fetch(`${API_BASE_URL}/api/config/keys`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        deepseek_api_key:    apiKeyInputs.value.deepseek    || null,
+                        siliconflow_api_key: apiKeyInputs.value.siliconflow || null,
+                        anthropic_api_key:   apiKeyInputs.value.anthropic   || null,
+                        doubao_api_key:      apiKeyInputs.value.doubao      || null,
+                    })
+                });
+                const d = await r.json();
+                if (d.status === 'success') {
+                    apiKeySaveOk.value = true;
+                    apiKeySaveMsg.value = '已保存';
+                    apiKeyInputs.value = { deepseek: '', siliconflow: '', anthropic: '', doubao: '' };
+                    if (d.keys) {
+                        apiKeyStatus.value = {
+                            deepseek:    d.keys.deepseek?.configured    || false,
+                            siliconflow: d.keys.siliconflow?.configured || false,
+                            anthropic:   d.keys.anthropic?.configured   || false,
+                            doubao:      d.keys.doubao?.configured      || false,
+                        };
+                    }
+                    await fetchAiModels();
+                    setTimeout(() => { apiKeySaveMsg.value = ''; }, 3000);
+                } else {
+                    apiKeySaveOk.value = false;
+                    apiKeySaveMsg.value = d.message || '保存失败';
+                }
+            } catch(e) {
+                apiKeySaveOk.value = false;
+                apiKeySaveMsg.value = '网络错误';
+            } finally {
+                isSavingKeys.value = false;
+            }
+        };
         const selectedCampaign = ref('');
         // AI 模型选择
         const aiModels = ref([]);
@@ -3073,31 +3270,53 @@ createApp({
         const isRollingBack = ref(false);
         const isGeneratingOptions = ref(false);
 
-        // ── 语音输入 ──
+        // ── 语音输入（MediaRecorder → 后端 Whisper，无需 Google 服务器）──
         const isRecording = ref(false);
-        let _speechRecognizer = null;
-        const toggleVoiceInput = () => {
-            const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-            if (!SR) { alert('当前浏览器不支持语音识别，请使用 Chrome 或 Edge。'); return; }
+        let _mediaRecorder = null;
+        let _audioChunks = [];
+        const toggleVoiceInput = async () => {
             if (isRecording.value) {
-                _speechRecognizer?.stop();
+                _mediaRecorder?.stop();
                 return;
             }
-            _speechRecognizer = new SR();
-            _speechRecognizer.lang = 'zh-CN';
-            _speechRecognizer.interimResults = true;
-            _speechRecognizer.continuous = false;
-            _speechRecognizer.onstart = () => { isRecording.value = true; };
-            _speechRecognizer.onend   = () => { isRecording.value = false; };
-            _speechRecognizer.onerror = (e) => {
+            let stream;
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            } catch(e) {
+                if (e.name === 'NotAllowedError') alert('麦克风权限被拒绝，请在浏览器设置中允许麦克风访问。');
+                else alert('无法访问麦克风：' + e.message);
+                return;
+            }
+            _audioChunks = [];
+            // 优先选 opus（SenseVoice 支持最好），回退到浏览器默认
+            const preferredMime = ['audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/webm']
+                .find(t => MediaRecorder.isTypeSupported(t)) || '';
+            _mediaRecorder = new MediaRecorder(stream, preferredMime ? { mimeType: preferredMime } : {});
+            _mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) _audioChunks.push(e.data); };
+            _mediaRecorder.onstop = async () => {
                 isRecording.value = false;
-                if (e.error === 'network') alert('语音识别网络错误，请使用 Edge 浏览器或检查网络连接。');
-                else if (e.error === 'not-allowed') alert('麦克风权限被拒绝，请在浏览器设置中允许麦克风访问。');
+                stream.getTracks().forEach(t => t.stop());
+                const actualMime = _mediaRecorder.mimeType || 'audio/webm';
+                const ext = actualMime.includes('ogg') ? 'ogg' : 'webm';
+                const blob = new Blob(_audioChunks, { type: actualMime });
+                const form = new FormData();
+                form.append('audio', blob, `recording.${ext}`);
+                try {
+                    const resp = await fetch(`${API_BASE_URL}/api/stt`, { method: 'POST', body: form });
+                    const data = await resp.json();
+                    if (data.text) {
+                        playerAction.value = (playerAction.value ? playerAction.value + ' ' : '') + data.text;
+                    } else if ('text' in data) {
+                        alert('未识别到语音内容，请说得更清晰或靠近麦克风后再试。');
+                    } else {
+                        alert('语音识别失败：' + (data.message || data.detail || JSON.stringify(data)));
+                    }
+                } catch(e) {
+                    alert('语音识别请求失败，请检查网络或后端是否运行。');
+                }
             };
-            _speechRecognizer.onresult = (e) => {
-                playerAction.value = Array.from(e.results).map(r => r[0].transcript).join('');
-            };
-            _speechRecognizer.start();
+            _mediaRecorder.start();
+            isRecording.value = true;
         };
 
         // ── TTS 朗读 ──
@@ -3236,6 +3455,8 @@ createApp({
             { value:'stat',  icon:'ph-heartbeat',  label:'HP/SAN 阈值' },
             { value:'ai',    icon:'ph-robot',      label:'AI 智能判断' },
         ];
+        const collapsedChars = ref({});
+        const toggleCharCollapse = (id) => { collapsedChars.value[id] = !collapsedChars.value[id]; };
         const showCharModal = ref(false);
         const isGeneratingNPC = ref(false);
         const isExpandingBranch = ref(false);
@@ -3261,7 +3482,7 @@ createApp({
             }
             triggerAlert.value = fired; if(triggerAlertTimer) clearTimeout(triggerAlertTimer);
             // target_node_id=0 时（如 gen_node 触发器）不自动跳转，避免错误跳到节点0
-            if(fired.mode==='hard' && fired.target_node_id) { triggerAlertTimer = setTimeout(()=>{ jumpToNode(fired.target_node_id); triggerAlert.value=null; }, 3000); }
+            if(fired.mode==='hard' && fired.target_node_id) { triggerAlertTimer = setTimeout(()=>{ jumpToNode(fired.target_node_id, fired.target_node_name); triggerAlert.value=null; }, 3000); }
             else { triggerAlertTimer = setTimeout(()=>{triggerAlert.value=null;}, 8000); }
         };
         const statChangesLog = ref([]);
@@ -4162,10 +4383,13 @@ createApp({
                     if(d.generated_nodes&&d.generated_nodes.length>0){
                         d.generated_nodes.forEach(gen=>{
                             storyNodes.value.push({id:gen.node_id,name:gen.node_name,summary:'',content:gen.node_content,expanded_content:'',options:[]});
+                            const genLabel = '[AI生成] ' + gen.node_name;
                             showTriggerAlert({trigger_id:gen.trigger_id,label:'AI生成：'+gen.node_name,mode:gen.mode,target_node_id:gen.node_id,target_node_name:gen.node_name,fire_count:1,actions_log:gen.actions_log||[]});
-                            if(gen.mode==='soft'&&currentNode.value&&currentNode.value.id===next.id){
+                            if(gen.mode==='hard'){
+                                triggerAlertTimer = setTimeout(()=>{ jumpToNode(gen.node_id, genLabel); triggerAlert.value=null; }, 3000);
+                            } else if(gen.mode==='soft'&&currentNode.value&&currentNode.value.id===next.id){
                                 if(!currentNode.value.options)currentNode.value.options=[];
-                                currentNode.value.options.push({id:'gen_'+gen.node_id,text:'[AI生成] '+gen.node_name,next_node_id:gen.node_id,_trigger:true,_generated:true});
+                                currentNode.value.options.push({id:'gen_'+gen.node_id,text:genLabel,next_node_id:gen.node_id,_trigger:true,_generated:true});
                             }
                         });
                     }
@@ -4195,22 +4419,20 @@ createApp({
 
         // ── Characters ──
         const saveStatLabels=async()=>{try{await fetch(`${API_BASE_URL}/api/game/stat-labels`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({hp_label:hpLabel.value,san_label:sanLabel.value})});}catch(e){}};
-        const saveCharacterState=async char=>{try{await fetch(`${API_BASE_URL}/api/game/character/${char.id}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:char.name,hp:char.hp,san:char.san,inventory:char.inventory||'',status:char.status||'active'})});}catch(e){}};
+        const saveCharacterState=async char=>{try{await fetch(`${API_BASE_URL}/api/game/character/${char.id}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:char.name,hp:char.hp,san:char.san,inventory:char.inventory||'',personality:char.personality||'',status:char.status||'active'})});}catch(e){}};
         const createCharacter=async()=>{if(!newChar.value.name.trim())return;try{await fetch(`${API_BASE_URL}/api/game/character`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(newChar.value)});showCharModal.value=false;resetNewChar();await fetchGameState();}catch(e){}};
         const deleteCharacter=async charId=>{if(!confirm('放逐该实体？'))return;try{await fetch(`${API_BASE_URL}/api/game/character/${charId}`,{method:'DELETE'});await fetchGameState();}catch(e){}};
 
         // ── NPC Persona 编辑 ──
         const openPersonaModal = (char) => {
             personaTarget.value = char;
-            // 从 inventory 中解析已有的 persona 标签
-            const inv = char.inventory || '';
-            const mbtiMatch = inv.match(/\[([A-Z]{4}[^\]]*)\]/);
+            // 从独立的 personality 字段解析
+            const p = char.personality || '';
+            const mbtiMatch = p.match(/\[([A-Z]{4}[^\]]*)\]/);
             personaMbti.value = mbtiMatch ? mbtiMatch[1] : '';
-            // 解析癖好
-            const quirkMatch = inv.match(/\{([^}]+)\}/);
+            const quirkMatch = p.match(/\{([^}]+)\}/);
             personaQuirks.value = quirkMatch ? quirkMatch[1].split('/').map(s=>s.trim()).filter(Boolean) : [];
-            // 解析备注（<...>）
-            const noteMatch = inv.match(/<([^>]+)>/);
+            const noteMatch = p.match(/<([^>]+)>/);
             personaNote.value = noteMatch ? noteMatch[1] : '';
             showPersonaModal.value = true;
         };
@@ -4226,18 +4448,7 @@ createApp({
         const savePersona = async () => {
             if (!personaTarget.value) return;
             const char = personaTarget.value;
-            // 从 inventory 中移除旧的 persona 标签
-            let inv = (char.inventory || '');
-            inv = inv.replace(/\[[A-Z]{4}[^\]]*\]\s*/g, '');
-            inv = inv.replace(/\{[^}]*\}\s*/g, '');
-            inv = inv.replace(/<[^>]*>\s*/g, '');
-            inv = inv.trim();
-            // 拼接新的 persona 标签
-            const personaStr = buildPersonaString();
-            if (personaStr) {
-                inv = personaStr + (inv ? ', ' + inv : '');
-            }
-            char.inventory = inv;
+            char.personality = buildPersonaString();
             await saveCharacterState(char);
             showPersonaModal.value = false;
         };
@@ -4314,15 +4525,7 @@ createApp({
         const savePersonaFull = async () => {
             if (!personaTarget.value) return;
             const char = personaTarget.value;
-            // 保存 inventory 侧的 MBTI/癖好
-            let inv = (char.inventory || '');
-            inv = inv.replace(/\[[A-Z]{4}[^\]]*\]\s*/g, '');
-            inv = inv.replace(/\{[^}]*\}\s*/g, '');
-            inv = inv.replace(/<[^>]*>\s*/g, '');
-            inv = inv.trim();
-            const personaStr = buildPersonaString();
-            if (personaStr) inv = personaStr + (inv ? ', ' + inv : '');
-            char.inventory = inv;
+            char.personality = buildPersonaString();
             await saveCharacterState(char);
             // 保存情绪/记忆/破防到 world_entities
             const entity = worldEntities.value.find(e => e.name === char.name && e.entity_type === 'npc');
@@ -4619,7 +4822,7 @@ createApp({
 
         watch(isEditMode, v => { if (v) syncEditData(); });
         watch(volume, v => { if (audioRef.value) audioRef.value.volume = v; });
-        onMounted(() => { fetchCampaigns(); fetchAiModels(); if (audioRef.value) audioRef.value.volume = 0.3; });
+        onMounted(() => { fetchCampaigns(); fetchAiModels(); fetchApiKeyStatus(); if (audioRef.value) audioRef.value.volume = 0.3; });
 
         // 进入游戏时一并拉取时间线和地图
         const enterCurrentGameWithTl = async () => {
@@ -5056,7 +5259,8 @@ createApp({
             appState, isLoading, dbConnected, campaignFiles, selectedCampaign,
             // AI 模型
             aiModels, activeAiModel, fetchAiModels, switchAiModel, modelAccentColor, modelAccentRgb, modelIcon, cycleModel,
-            storyNodes, characters, currentNode, isEditMode, hpLabel, sanLabel, editData, newOptionText, newOptionTarget, showWorldviewModal, worldviewContent, showMemoryModal, memoryContent, showLorebookModal, lorebook, currentLore, aiGeneratedText, playerAction, actionType, isGeneratingText, checkpointCount, isRollingBack, goBack, isGeneratingOptions, isRecording, toggleVoiceInput, ttsPlaying, ttsVoice, ttsTone, ttsRate, ttsSpeak, imgPrompt, imgStyle, imgModel, isGeneratingImage, isLoadingImg, generatedImageUrl, imgEnPrompt, imgPromptUsed, imgLoadError, audioRef, tracks, currentTrackId, currentTrackUrl, customTrackUrl, isPlaying, volume, narrativeMood, timeSkipInput, forceNarrativeThrust, optionLikelihoods, fateSpinning, fateHighlightIdx, showTriggerModal, triggers, currentTrigger, condTypes, showCharModal, isGeneratingNPC, isExpandingBranch, expandingBranchText, newChar, npcToast, triggerAlert, passiveAlerts, statChangesLog, showStatChanges, showBattleReportModal, battleReport, isGeneratingReport, battleReportFilename, leftTab, treeContainerRef, treeLayout,
+            showApiKeyPanel, apiKeyStatus, apiKeyInputs, apiKeysMissing, isSavingKeys, apiKeySaveMsg, apiKeySaveOk, fetchApiKeyStatus, saveApiKeys,
+            storyNodes, characters, currentNode, isEditMode, hpLabel, sanLabel, editData, newOptionText, newOptionTarget, showWorldviewModal, worldviewContent, showMemoryModal, memoryContent, showLorebookModal, lorebook, currentLore, aiGeneratedText, playerAction, actionType, isGeneratingText, checkpointCount, isRollingBack, goBack, isGeneratingOptions, isRecording, toggleVoiceInput, ttsPlaying, ttsVoice, ttsTone, ttsRate, ttsSpeak, imgPrompt, imgStyle, imgModel, isGeneratingImage, isLoadingImg, generatedImageUrl, imgEnPrompt, imgPromptUsed, imgLoadError, audioRef, tracks, currentTrackId, currentTrackUrl, customTrackUrl, isPlaying, volume, narrativeMood, timeSkipInput, forceNarrativeThrust, optionLikelihoods, fateSpinning, fateHighlightIdx, showTriggerModal, triggers, currentTrigger, condTypes, collapsedChars, toggleCharCollapse, showCharModal, isGeneratingNPC, isExpandingBranch, expandingBranchText, newChar, npcToast, triggerAlert, passiveAlerts, statChangesLog, showStatChanges, showBattleReportModal, battleReport, isGeneratingReport, battleReportFilename, leftTab, treeContainerRef, treeLayout,
             // 时间线系统
             timelinePanelOpen, timelines, showTlEditModal, tlEditData, tlColorPresets,
             showTlMemoryModal, tlMemoryTarget, tlMemoryContent,

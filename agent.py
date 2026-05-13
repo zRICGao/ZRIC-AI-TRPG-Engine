@@ -366,11 +366,15 @@ def build_system_context(conn, *search_texts):
 
     l1_context = _l1_get_working_context(conn) if _l1_get_working_context else ""
 
-    chars = conn.execute("SELECT name, role, hp, san, inventory, status FROM characters").fetchall()
+    chars = conn.execute("SELECT name, role, hp, san, inventory, personality, status FROM characters").fetchall()
     active_chars = [c for c in chars if (c["status"] or "active") == "active"]
     benched_chars = [c for c in chars if (c["status"] or "") == "benched"]
+    def _strip_mbti_desc(p: str) -> str:
+        return re.sub(r'\([^)]*\)', '', p).strip()
+
     party_status = "\n".join([
-        f"- {c['name']} (HP:{c['hp']}, SAN:{c['san']}) | 状态/物品: {c['inventory'] or '无'}"
+        f"- {c['name']} (HP:{c['hp']}, SAN:{c['san']}) | 物品: {c['inventory'] or '无'}"
+        + (f" | 性格: {_strip_mbti_desc(c['personality'])}" if c['personality'] else "")
         for c in active_chars
     ])
     if benched_chars:
@@ -1313,6 +1317,16 @@ def expand_branch_content(req: ExpandBranchRequest):
 
         # 写回 nodes.content
         conn.execute("UPDATE nodes SET expanded_content=? WHERE id=?", (expanded_text, req.node_id))
+        # 回填战报史册中该场景最近一条记录的深入调查快照
+        try:
+            conn.execute(
+                "UPDATE chronicle_log SET expanded_content=? WHERE id=("
+                "  SELECT id FROM chronicle_log WHERE scene_id=? ORDER BY id DESC LIMIT 1"
+                ")",
+                (expanded_text, req.node_id)
+            )
+        except Exception as e:
+            _log.warning("chronicle_log 回填深入调查失败: %s", e)
         conn.commit()
         conn.close()
         return {"status": "success", "content": expanded_text, "expanded": True}
@@ -1386,6 +1400,13 @@ def expand_branch_stream(req: ExpandBranchStreamRequest):
                 conn2 = get_db_connection()
                 conn2.execute("UPDATE nodes SET expanded_content=? WHERE id=?",
                               (full_text, req.node_id))
+                # 回填战报史册中该场景最近一条记录的深入调查快照
+                conn2.execute(
+                    "UPDATE chronicle_log SET expanded_content=? WHERE id=("
+                    "  SELECT id FROM chronicle_log WHERE scene_id=? ORDER BY id DESC LIMIT 1"
+                    ")",
+                    (full_text, req.node_id)
+                )
                 conn2.commit()
                 conn2.close()
             except Exception as e:
@@ -1556,7 +1577,7 @@ def expand_scene_text(request: ExpandTextRequest):
 {relevant_lore}
 {f"【知识库检索结果】{chr(10)}{rag_context}" if rag_context else ""}
 
-请结合上述所有信息扩写当前场景的细节（150字左右）。扩写内容必须与世界观和角色状态一致。"""
+请结合上述所有信息扩写当前场景的细节（150字左右）。扩写内容必须与世界观和角色状态一致，沉浸式文本，不要出现markdown格式或特殊符号。"""
 
     try:
         generated = _call_ai(system_prompt,
@@ -1568,7 +1589,7 @@ def expand_scene_text(request: ExpandTextRequest):
         try:
             merged_note = _call_ai(
                 "你是跑团记录员。将下方【原始描述】和【扩写补充】合并为一条不超过80字的精炼场景记忆，"
-                "保留所有新增细节，去除重复内容，用第三人称叙述，不加任何前缀或解释。",
+                "保留所有新增细节，去除重复内容，用第三人称叙述，不加任何前缀或解释。如果有重要关键词（如地点、NPC、物品等）务必保留。输出必须简洁且信息量大，适合记录在游戏记忆中供后续检索。",
                 f"【场景名】{request.scene_name}\n【原始描述】{request.content}\n【扩写补充】{generated}",
                 temperature=0.2, max_tokens=120, json_mode=False,
                 model_override=request.model
@@ -1710,7 +1731,7 @@ def npc_chat_commit(request: NPCChatCommitRequest):
         current_desc = sd.get("desc", "")
 
         # ── 调用 AI 推断情绪增量与记忆 ──────────────────────────────────────
-        sys_p = f"""你是游戏系统的情绪分析模块。根据一段微信聊天记录，判断 NPC【{request.npc_name}】的情绪变化，并用第一人称写下一条简短记忆。
+        sys_p = f"""你是游戏系统的情绪分析模块。根据一段微信聊天记录，判断 NPC【{request.npc_name}】的情绪变化，并用第一人称写下一条简短记忆。如果出现重要关键词（如地点、NPC、物品等）务必保留。
 
 NPC 背景：{current_desc}
 当前情绪：信任={emo.get('trust',0)} 恐惧={emo.get('fear',0)} 烦躁={emo.get('irritation',0)}

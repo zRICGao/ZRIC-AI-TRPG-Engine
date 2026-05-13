@@ -1,5 +1,11 @@
+"""
+Z.R.I.C 引擎 — 主系统模块 (main.py)
+"""
+
+
+
 import fastapi
-from fastapi import WebSocket, WebSocketDisconnect
+from fastapi import WebSocket, WebSocketDisconnect, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.exceptions import RequestValidationError
@@ -10,6 +16,7 @@ import sqlite3
 import json
 import json_repair 
 import os
+import io
 import glob
 from datetime import datetime
 import urllib.parse
@@ -149,10 +156,9 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 DOUBAO_API_KEY = os.environ.get("DOUBAO_API_KEY", "")
 
 if not DEEPSEEK_API_KEY:
-    print("⚠️  警告：未检测到 DEEPSEEK_API_KEY 环境变量！AI 功能将不可用。", flush=True)
-    print("   请在 .env 文件或系统环境变量中设置 DEEPSEEK_API_KEY=sk-xxx", flush=True)
+    print("⚠️  警告：未检测到 DEEPSEEK_API_KEY，AI 功能暂不可用。请在前端首页填写 API Key 后生效。", flush=True)
 
-client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
+client = OpenAI(api_key=DEEPSEEK_API_KEY or "placeholder", base_url="https://api.deepseek.com")
 
 DB_FILE = os.path.join(BASE_DIR, "rpg_game.db")
 CAMPAIGNS_DIR = os.path.join(BASE_DIR, "campaigns")  # 模块化剧本文件夹
@@ -329,6 +335,9 @@ def init_db():
     # 平滑升级：characters 加 status 字段
     try: cursor.execute("ALTER TABLE characters ADD COLUMN status TEXT DEFAULT 'active'")
     except sqlite3.OperationalError: pass
+    # 平滑升级：characters 加 personality 字段（与 inventory 解耦）
+    try: cursor.execute("ALTER TABLE characters ADD COLUMN personality TEXT DEFAULT ''")
+    except sqlite3.OperationalError: pass
     # 平滑升级：旧 map_rooms 表加 floor 字段
     try: cursor.execute("ALTER TABLE map_rooms ADD COLUMN floor INTEGER NOT NULL DEFAULT 1")
     except sqlite3.OperationalError: pass
@@ -364,6 +373,20 @@ def init_db():
         snapshot     TEXT    NOT NULL,
         created_at   TEXT    NOT NULL DEFAULT (datetime('now','localtime'))
     )''')
+
+    # 【战报史册】：永久记录玩家经过的每个场景快照（不参与折叠/淘汰）
+    # 用于 export-battle-report 增量式生成：每次只读 id > last_chronicle_position 的新条目
+    cursor.execute('''CREATE TABLE IF NOT EXISTS chronicle_log (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        scene_id          INTEGER NOT NULL DEFAULT 0,
+        scene_name        TEXT    NOT NULL DEFAULT '',
+        scene_content     TEXT    NOT NULL DEFAULT '',
+        expanded_content  TEXT    NOT NULL DEFAULT '',
+        player_action     TEXT    NOT NULL DEFAULT '',
+        created_at        TEXT    NOT NULL DEFAULT (datetime('now','localtime'))
+    )''')
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_chronicle_scene ON chronicle_log(scene_id)")
+    cursor.execute("INSERT OR IGNORE INTO system_state (key, value) VALUES ('last_chronicle_position', '0')")
 
     # 初始化本地剧情记忆流字段
     cursor.execute("INSERT OR IGNORE INTO system_state (key, value) VALUES ('session_memory', '【跑团记忆日志已初始化】\n')")
@@ -421,7 +444,7 @@ class AIContextRequest(BaseModel): scene_name: str = ""; content: str = ""
 # DynamicActionRequest 已移至 agent.py
 class CharUpdateRequest(BaseModel):
     name: str | None = None
-    hp: int; san: int; inventory: str = ""
+    hp: int; san: int; inventory: str = ""; personality: str = ""
     status: str = "active"
 class NodeCreateRequest(BaseModel): name: str; summary: str; content: str
 class NodeUpdateRequest(BaseModel): name: str; summary: str; content: str
@@ -435,6 +458,7 @@ class CharCreateRequest(BaseModel):
     hp: int = 100
     san: int = 80
     inventory: str = ""
+    personality: str = ""
     status: str = "active"
 class AutoNPCRequest(BaseModel):
     scene_name: str
@@ -577,10 +601,10 @@ def load_campaign(req: LoadCampaignRequest):
         # ── 还原业务数据 ───────────────────────────────────────────
         for char in config.get("characters", []):
             cursor.execute(
-                "INSERT INTO characters (name, role, hp, san, inventory, status) VALUES (?,?,?,?,?,?)",
+                "INSERT INTO characters (name, role, hp, san, inventory, personality, status) VALUES (?,?,?,?,?,?,?)",
                 (char.get("name"), char.get("role"),
                  char.get("hp"), char.get("san"), char.get("inventory", ""),
-                 char.get("status", "active"))
+                 char.get("personality", ""), char.get("status", "active"))
             )
         for node in config.get("nodes", []):
             cursor.execute(
@@ -956,11 +980,11 @@ def get_game_state():
 def update_character(char_id: int, req: CharUpdateRequest):
     with safe_db() as conn:
         if req.name is not None and req.name.strip():
-            conn.execute("UPDATE characters SET name=?, hp=?, san=?, inventory=?, status=? WHERE id=?",
-                         (req.name.strip()[:50], req.hp, req.san, req.inventory, req.status, char_id))
+            conn.execute("UPDATE characters SET name=?, hp=?, san=?, inventory=?, personality=?, status=? WHERE id=?",
+                         (req.name.strip()[:50], req.hp, req.san, req.inventory, req.personality, req.status, char_id))
         else:
-            conn.execute("UPDATE characters SET hp=?, san=?, inventory=?, status=? WHERE id=?",
-                         (req.hp, req.san, req.inventory, req.status, char_id))
+            conn.execute("UPDATE characters SET hp=?, san=?, inventory=?, personality=?, status=? WHERE id=?",
+                         (req.hp, req.san, req.inventory, req.personality, req.status, char_id))
         conn.commit()
     return {"status": "success"}
 
@@ -1243,14 +1267,14 @@ def create_character(req: CharCreateRequest):
         ).fetchone()
         if _existing_char:
             conn.execute(
-                "UPDATE characters SET role=?, hp=?, san=?, inventory=?, status=? WHERE id=?",
-                (req.role[:10], req.hp, req.san, req.inventory[:200], req.status, _existing_char["id"])
+                "UPDATE characters SET role=?, hp=?, san=?, inventory=?, personality=?, status=? WHERE id=?",
+                (req.role[:10], req.hp, req.san, req.inventory[:200], req.personality[:500], req.status, _existing_char["id"])
             )
             new_id = _existing_char["id"]
         else:
             new_id = conn.execute(
-                "INSERT INTO characters (name, role, hp, san, inventory, status) VALUES (?, ?, ?, ?, ?, ?)",
-                (req.name[:50], req.role[:10], req.hp, req.san, req.inventory[:200], req.status)
+                "INSERT INTO characters (name, role, hp, san, inventory, personality, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (req.name[:50], req.role[:10], req.hp, req.san, req.inventory[:200], req.personality[:500], req.status)
             ).lastrowid
         # NPC 自动创建世界实体条目（使情绪状态机可用）
         if req.role.upper() == 'NPC':
@@ -1640,28 +1664,123 @@ def generate_image(request: ImageGenRequest):
 # ---------------------------------------------------------
 # API 接口：战报/小说导出
 # ---------------------------------------------------------
+@app.get("/api/debug/battle-report-state")
+def debug_battle_report_state():
+    conn = get_db_connection()
+    pos_row   = conn.execute("SELECT value FROM system_state WHERE key='last_chronicle_position'").fetchone()
+    pend_row  = conn.execute("SELECT value FROM system_state WHERE key='pending_regenerate'").fetchone()
+    count_row = conn.execute("SELECT COUNT(*) as cnt, MIN(id) as min_id, MAX(id) as max_id FROM chronicle_log").fetchone()
+    conn.close()
+    return {
+        "last_chronicle_position": pos_row["value"] if pos_row else None,
+        "pending_regenerate":      pend_row["value"] if pend_row else None,
+        "chronicle_log_count":     count_row["cnt"],
+        "chronicle_log_id_range":  f"{count_row['min_id']} ~ {count_row['max_id']}",
+    }
+
+# ---------------------------------------------------------
 @app.post("/api/ai/export-battle-report")
 def export_battle_report():
-    """将 session_memory 喂给 AI，润色为一篇奇幻小说/战报（Markdown）。"""
+    """
+    增量式战报生成：
+      - 输入源不再是 session_memory，而是 chronicle_log 中 id > last_chronicle_position 的所有新场景快照
+        （每条包含场景名、content、深入调查后的 expanded_content、玩家动作）
+      - 生成完成后将 last_chronicle_position 推进到本次最大 id
+      - 每次另存为一个新的 .md 文件，不重复生成之前已写过的部分
+    """
     conn = get_db_connection()
-    mem_row = conn.execute("SELECT value FROM system_state WHERE key='session_memory'").fetchone()
-    wv_row  = conn.execute("SELECT value FROM system_state WHERE key='worldview'").fetchone()
-    chars   = conn.execute("SELECT name, role FROM characters").fetchall()
-    conn.close()
+    pos_row = conn.execute(
+        "SELECT value FROM system_state WHERE key='last_chronicle_position'"
+    ).fetchone()
+    last_pos = int(pos_row["value"]) if pos_row and pos_row["value"].isdigit() else 0
 
-    memory   = mem_row["value"] if mem_row else "无记录"
+    rows = conn.execute(
+        "SELECT * FROM chronicle_log WHERE id > ? ORDER BY id ASC", (last_pos,)
+    ).fetchall()
+
+    wv_row = conn.execute("SELECT value FROM system_state WHERE key='worldview'").fetchone()
+    chars  = conn.execute("SELECT name, role FROM characters").fetchall()
+
+    if not rows:
+        regen_row = conn.execute(
+            "SELECT value FROM system_state WHERE key='pending_regenerate'"
+        ).fetchone()
+        pending = regen_row and regen_row["value"] == "1"
+
+        if not pending:
+            # 第一次无新场景：告知用户，并立 flag 等待下次重新生成
+            conn.execute(
+                "INSERT OR REPLACE INTO system_state (key, value) VALUES ('pending_regenerate', '1')"
+            )
+            conn.commit()
+            conn.close()
+            return {
+                "status": "success",
+                "report": "（自上次生成以来暂无新场景，无需续写。）",
+                "filename": "",
+            }
+
+        # 第二次（用户点重新生成后触发）：拉取上一章全部场景重新生成
+        if last_pos > 0:
+            rows = conn.execute(
+                "SELECT * FROM chronicle_log WHERE id <= ? ORDER BY id ASC", (last_pos,)
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM chronicle_log ORDER BY id ASC"
+            ).fetchall()
+        if not rows:
+            conn.execute(
+                "INSERT OR REPLACE INTO system_state (key, value) VALUES ('pending_regenerate', '0')"
+            )
+            conn.commit()
+            conn.close()
+            return {
+                "status": "success",
+                "report": "（暂无可生成的场景记录。）",
+                "filename": "",
+            }
+        is_regenerate = True
+    else:
+        is_regenerate = False
+        # 有新场景时清除 flag
+        conn.execute(
+            "INSERT OR REPLACE INTO system_state (key, value) VALUES ('pending_regenerate', '0')"
+        )
+
     worldview = wv_row["value"] if wv_row else ""
     char_list = "、".join([c["name"] for c in chars]) or "未知角色"
 
+    # 拼接结构化输入：按时间顺序逐场景列出
+    parts = []
+    for i, r in enumerate(rows, 1):
+        parts.append(f"## 场景 {i}：{r['scene_name'] or '未命名场景'}")
+        if r["player_action"]:
+            parts.append(f"**玩家动作**：{r['player_action']}")
+        if r["scene_content"]:
+            parts.append(f"**场景描写**：\n{r['scene_content']}")
+        if r["expanded_content"]:
+            parts.append(f"**深入调查**：\n{r['expanded_content']}")
+        parts.append("")  # 空行分隔
+    structured_input = "\n".join(parts)
+
+    is_continuation = last_pos > 0 and not is_regenerate
     system_prompt = (
-        "你是一位才华横溢的奇幻小说作者。请将以下跑团流水账润色为一篇排版精美、文笔优美的奇幻战报/小说章节。"
-        "要求："
-        "- 使用 Markdown 格式，包含标题、段落分节"
-        "- 保留所有关键事件、人名、地点，不得改变剧情走向"
-        "- 文笔生动，有代入感，适当补充细节描写"
-        "- 结尾加一句「今日战报完」"
-        f"【世界观背景】{worldview}"
-        f"【主要角色】{char_list}"
+        "你是一位才华横溢的奇幻小说作者。下面提供按时间顺序排列的若干场景快照，"
+        "每个场景包含玩家动作、场景描写、（可选的）深入调查细节。"
+        "请将其润色为一段排版精美、文笔优美的奇幻战报/小说章节。要求："
+        "- 使用 Markdown 格式，包含标题、段落分节，长度根据场景数量自然延伸，不要强行截断"
+        "- 严格按场景给定的时间顺序展开，保留所有人名、地点、关键事件，不得改变剧情走向"
+        "- 充分利用「深入调查」中的细节进行环境与氛围描写"
+        "- 文笔生动、有代入感"
+        + (
+            "- 这是续章，请用一个承接上一章的简短开篇过渡几句，不要重复之前章节中已经叙述过的剧情"
+            if is_continuation else
+            "- 这是开篇第一章"
+        )
+        + "- 结尾加一句「（本章完）」"
+        + f"【世界观背景】{worldview}"
+        + f"【主要角色】{char_list}"
     )
 
     try:
@@ -1669,24 +1788,190 @@ def export_battle_report():
             model="deepseek-v4-flash",
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user",   "content": f"以下是今晚的跑团记录，请润色：{memory}"}
+                {"role": "user",   "content": f"以下是本次需要润色的场景快照：\n\n{structured_input}"}
             ],
             temperature=0.8,
-            max_tokens=2000,
+            max_tokens=8000,
         )
         report = resp.choices[0].message.content.strip()
-        # 同时写入文件
+
+        # 写入新文件
         report_dir = os.path.join(BASE_DIR, "battle_report")
         os.makedirs(report_dir, exist_ok=True)
         filename = f"battle_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
         filepath = os.path.join(report_dir, filename)
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(report)
+
+        # 生成成功后推进位置（重新生成时不推进，保留原位置便于再次重试）
+        if not is_regenerate:
+            new_pos = rows[-1]["id"]
+            conn.execute(
+                "INSERT OR REPLACE INTO system_state (key, value) VALUES ('last_chronicle_position', ?)",
+                (str(new_pos),)
+            )
+        # 无论正向还是重新生成，成功后都清除 flag
+        conn.execute(
+            "INSERT OR REPLACE INTO system_state (key, value) VALUES ('pending_regenerate', '0')"
+        )
+        conn.commit()
+        conn.close()
         return {"status": "success", "report": report, "filename": filename}
     except Exception as e:
+        conn.close()
         return {"status": "error", "message": str(e), "report": ""}
 
 
+# ---------------------------------------------------------
+# API 接口：API Key 配置（前端可热更新 .env 中的密钥）
+# ---------------------------------------------------------
+class ApiKeysUpdateRequest(BaseModel):
+    deepseek_api_key: str | None = None
+    siliconflow_api_key: str | None = None
+    anthropic_api_key: str | None = None
+    doubao_api_key: str | None = None
+
+@app.get("/api/config/keys")
+def get_api_keys_status():
+    """返回各 API Key 的配置状态（不返回明文密钥）。"""
+    return {
+        "status": "success",
+        "keys": {
+            "deepseek":    {"configured": bool(DEEPSEEK_API_KEY),    "label": "DeepSeek API Key",    "required": True},
+            "siliconflow": {"configured": bool(SILICONFLOW_API_KEY), "label": "硅基流动 API Key",   "required": True},
+            "anthropic":   {"configured": bool(ANTHROPIC_API_KEY),   "label": "Anthropic API Key",   "required": False},
+            "doubao":      {"configured": bool(DOUBAO_API_KEY),       "label": "豆包 API Key",        "required": False},
+        }
+    }
+
+@app.post("/api/config/keys")
+def update_api_keys(req: ApiKeysUpdateRequest):
+    """
+    将用户填写的 API Key 写入 .env 文件并热重载。
+    只更新有值的字段，不清空已有配置。
+    """
+    global DEEPSEEK_API_KEY, SILICONFLOW_API_KEY, ANTHROPIC_API_KEY, DOUBAO_API_KEY, client
+
+    env_path = os.path.join(BASE_DIR, ".env")
+
+    # 读取现有 .env 内容
+    try:
+        with open(env_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+    except FileNotFoundError:
+        lines = []
+
+    def _set_env_line(lines: list, key: str, value: str) -> list:
+        """更新或追加 KEY=VALUE 行。"""
+        prefix = f"{key}="
+        updated = False
+        result = []
+        for line in lines:
+            if line.startswith(prefix) or line.startswith(f"# {key}="):
+                result.append(f"{key}={value}\n")
+                updated = True
+            else:
+                result.append(line)
+        if not updated:
+            result.append(f"{key}={value}\n")
+        return result
+
+    field_map = {
+        "DEEPSEEK_API_KEY":    req.deepseek_api_key,
+        "SILICONFLOW_API_KEY": req.siliconflow_api_key,
+        "ANTHROPIC_API_KEY":   req.anthropic_api_key,
+        "DOUBAO_API_KEY":      req.doubao_api_key,
+    }
+
+    changed = []
+    for env_key, new_val in field_map.items():
+        if new_val and new_val.strip():
+            lines = _set_env_line(lines, env_key, new_val.strip())
+            changed.append(env_key)
+
+    if not changed:
+        return {"status": "error", "message": "未提供任何有效的 API Key"}
+
+    try:
+        with open(env_path, "w", encoding="utf-8") as f:
+            f.writelines(lines)
+    except Exception as e:
+        return {"status": "error", "message": f"写入 .env 失败：{e}"}
+
+    # 热重载：更新全局变量和各模块客户端
+    if "DEEPSEEK_API_KEY" in changed:
+        DEEPSEEK_API_KEY = req.deepseek_api_key.strip()
+        os.environ["DEEPSEEK_API_KEY"] = DEEPSEEK_API_KEY
+        client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
+
+    if "SILICONFLOW_API_KEY" in changed:
+        SILICONFLOW_API_KEY = req.siliconflow_api_key.strip()
+        os.environ["SILICONFLOW_API_KEY"] = SILICONFLOW_API_KEY
+        configure_rag(DB_FILE, SILICONFLOW_API_KEY)
+
+    if "ANTHROPIC_API_KEY" in changed:
+        ANTHROPIC_API_KEY = req.anthropic_api_key.strip()
+        os.environ["ANTHROPIC_API_KEY"] = ANTHROPIC_API_KEY
+
+    if "DOUBAO_API_KEY" in changed:
+        DOUBAO_API_KEY = req.doubao_api_key.strip()
+        os.environ["DOUBAO_API_KEY"] = DOUBAO_API_KEY
+
+    # 重新配置 agent（注入更新后的 client 和 anthropic key）
+    from agent import configure_agent as _reconfigure_agent
+    _reconfigure_agent(
+        db_file=DB_FILE,
+        deepseek_client=client,
+        anthropic_api_key=ANTHROPIC_API_KEY,
+        persona_config=PERSONA_CONFIG,
+        fn_get_map_context=_get_map_context,
+        fn_auto_place_room=_auto_place_room,
+        fn_process_map_actions=_process_map_actions,
+        fn_get_current_room_id=_get_current_room_id,
+        fn_ai_extract_and_upsert_entities=_ai_extract_and_upsert_entities,
+        fn_build_persona_instruction=_build_persona_instruction,
+        fn_l1_append=_l1_append,
+        fn_l1_get_working_context=_l1_get_working_context,
+        fn_append_to_memory=append_to_memory,
+        fn_tl_append_memory=_tl_append_memory,
+        fn_get_world_entities_text=_get_world_entities_text,
+        fn_rag_retrieve=_rag_retrieve,
+        fn_get_embeddings=_get_embeddings,
+        fn_refresh_vector_cache=_refresh_vector_cache,
+    )
+
+    return {
+        "status": "success",
+        "message": f"已更新：{', '.join(changed)}",
+        "keys": {
+            "deepseek":    {"configured": bool(DEEPSEEK_API_KEY)},
+            "siliconflow": {"configured": bool(SILICONFLOW_API_KEY)},
+            "anthropic":   {"configured": bool(ANTHROPIC_API_KEY)},
+            "doubao":      {"configured": bool(DOUBAO_API_KEY)},
+        }
+    }
+
+
+# ---------------------------------------------------------
+# API 接口：语音转文字（STT）— 使用硅基流动 SenseVoice，绕开 Google 服务器
+# ---------------------------------------------------------
+@app.post("/api/stt")
+async def speech_to_text(audio: UploadFile = File(...)):
+    """接收前端录音 blob，调用硅基流动 Whisper 兼容接口转写为文字。"""
+    if not SILICONFLOW_API_KEY:
+        raise fastapi.HTTPException(status_code=400, detail="未配置硅基流动 API Key，无法使用语音识别。")
+    audio_bytes = await audio.read()
+    _sf = OpenAI(api_key=SILICONFLOW_API_KEY, base_url="https://api.siliconflow.cn/v1")
+    filename = audio.filename or "recording.webm"
+    # 用 tuple 形式传文件，兼容性更好
+    try:
+        transcript = _sf.audio.transcriptions.create(
+            model="FunAudioLLM/SenseVoiceSmall",
+            file=(filename, audio_bytes, "audio/webm"),
+        )
+        return {"text": transcript.text}
+    except Exception as e:
+        raise fastapi.HTTPException(status_code=500, detail=f"语音识别失败：{e}")
 
 
 # =============================================================
@@ -1913,6 +2198,23 @@ def log_scene_visit(req: SceneVisitRequest):
     conn = get_db_connection()
     log = f"玩家选择「{req.option_text}」→ 进入场景【{req.node_name}】"
     append_to_memory(conn, log)
+
+    # 同步写入战报史册：抓取当前场景 content/expanded_content 作为快照
+    try:
+        node = conn.execute(
+            "SELECT content, expanded_content FROM nodes WHERE id=?", (req.node_id,)
+        ).fetchone()
+        scene_content   = (node["content"] if node else "") or ""
+        expanded_snap   = (node["expanded_content"] if node else "") or ""
+        conn.execute(
+            "INSERT INTO chronicle_log (scene_id, scene_name, scene_content, "
+            "expanded_content, player_action) VALUES (?,?,?,?,?)",
+            (req.node_id, req.node_name, scene_content, expanded_snap, req.option_text)
+        )
+        conn.commit()
+    except Exception as e:
+        _log.warning("写入 chronicle_log 失败: %s", e)
+
     conn.close()
     return {"status": "success"}
 

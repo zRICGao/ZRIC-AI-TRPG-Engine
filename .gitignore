@@ -44,6 +44,9 @@ battle_report/
 # 工作日志
 工作日志/
 
+# 前端工程文件
+frontend/
+
 # IDE
 .vscode/
 .idea/

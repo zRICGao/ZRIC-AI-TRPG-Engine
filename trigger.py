@@ -601,9 +601,23 @@ def _execute_actions(actions_raw: str, conn, trigger_id: int,
                                 "UPDATE nodes SET expanded_content=expanded_content||? WHERE id=?",
                                 ("\n\n" + text, target_node)
                             )
+                            # 同步追加到战报史册最近一条记录的深入调查快照
+                            conn.execute(
+                                "UPDATE chronicle_log SET expanded_content=expanded_content||? "
+                                "WHERE id=(SELECT id FROM chronicle_log WHERE scene_id=? "
+                                "ORDER BY id DESC LIMIT 1)",
+                                ("\n\n" + text, target_node)
+                            )
                         else:
                             conn.execute(
                                 "UPDATE nodes SET content=content||? WHERE id=?",
+                                ("\n\n" + text, target_node)
+                            )
+                            # 同步追加到战报史册最近一条记录的场景快照
+                            conn.execute(
+                                "UPDATE chronicle_log SET scene_content=scene_content||? "
+                                "WHERE id=(SELECT id FROM chronicle_log WHERE scene_id=? "
+                                "ORDER BY id DESC LIMIT 1)",
                                 ("\n\n" + text, target_node)
                             )
                         side_effects["text_injections"].append(
@@ -1140,16 +1154,24 @@ def check_triggers(req: CheckTriggersRequest):
                     "actions_log":      side["log"],
                 })
 
-            # passive 模式不写导航记忆，其他模式保留系统审计记录
+            # passive 模式无导航意图，不写记忆；soft/hard 模式写简洁的自然语言场景提示
+            # hard 模式场景切换的详细记忆由前端 log-scene-visit 统一写入，此处仅补充触发背景
             if t["mode"] != "passive" and _fn_append_to_memory:
                 if side["generated_nodes"]:
-                    node_ref = f"AI生成节点[{side['generated_nodes'][0]['node_id']}]"
-                else:
-                    node_ref = f"节点[{t['target_node_id']}]"
-                _fn_append_to_memory(
-                    conn,
-                    f"关键触发器「{t['label']}」已触发（第{new_count}次），剧情指向{node_ref}。"
-                )
+                    gn = side["generated_nodes"][0]
+                    _fn_append_to_memory(
+                        conn,
+                        f"触发「{t['label']}」，进入「{gn['node_name']}」。"  #触发+触发器名称
+                    )
+                elif t["target_node_id"]:
+                    target_node = conn.execute(
+                        "SELECT name FROM nodes WHERE id=?", (t["target_node_id"],)
+                    ).fetchone()
+                    scene_label = target_node["name"] if target_node else f"场景{t['target_node_id']}"
+                    _fn_append_to_memory(
+                        conn,
+                        f"触发「{t['label']}」，场景切换至「{scene_label}」。"
+                    )
 
         conn.commit()
         conn.close()
