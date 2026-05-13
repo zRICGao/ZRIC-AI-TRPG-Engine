@@ -38,12 +38,7 @@ DM在环的半自动文字冒险推演模拟器。AI 实时生成多分支剧情
 **前置要求**：安装 [Python 3.10+](https://www.python.org/downloads/)（安装时勾选 **Add Python to PATH**）
 
 1. 点击本页右上角 **Code → Download ZIP**，解压到任意文件夹
-2. 在解压后的文件夹中，复制 `.env.example`，重命名为 `.env`，用记事本打开，粘贴你的 API Key：
-   ```
-   DEEPSEEK_API_KEY=sk-你的key
-   SILICONFLOW_API_KEY=sk-你的key
-   ```
-3. 双击 `启动.bat`，浏览器会自动打开引擎界面
+2. 双击 `启动.bat`，浏览器会自动打开引擎界面，此时会弹出一个API Key配置窗口，在相应界面获取并复制上去即可。
 
 API Key 获取：
 - DeepSeek（必填）：https://platform.deepseek.com/
