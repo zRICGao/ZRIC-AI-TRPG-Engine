@@ -31,21 +31,45 @@ DM在环的半自动文字冒险推演模拟器。AI 实时生成多分支剧情
 
 ## 🚀 快速开始
 
-### 环境要求
+### 方法一：直接下载运行（推荐）
+
+> 适合不熟悉命令行的用户，5 分钟内即可启动。
+
+**前置要求**：安装 [Python 3.10+](https://www.python.org/downloads/)（安装时勾选 **Add Python to PATH**）
+
+1. 点击本页右上角 **Code → Download ZIP**，解压到任意文件夹
+2. 在解压后的文件夹中，复制 `.env.example`，重命名为 `.env`，用记事本打开，粘贴你的 API Key：
+   ```
+   DEEPSEEK_API_KEY=sk-你的key
+   SILICONFLOW_API_KEY=sk-你的key
+   ```
+3. 双击 `启动.bat`，浏览器会自动打开引擎界面
+
+API Key 获取：
+- DeepSeek（必填）：https://platform.deepseek.com/
+- 硅基流动（必填）：https://cloud.siliconflow.cn/
+- Anthropic（可选，用于 Claude 推演）：https://console.anthropic.com/
+- 豆包（可选，用于收费生图）：https://console.volcengine.com/ark
+
+---
+
+### 方法二：命令行安装
+
+**环境要求**
 
 - Python 3.10+
 - DeepSeek API Key（必需，AI 推演核心）
 - 硅基流动 API Key（必需，用于 embedding 和免费生图）
 
-### 安装
+**安装**
 
 ```bash
-git clone https://github.com/你的用户名/nexus-rpg-engine.git
-cd nexus-rpg-engine
+git clone https://github.com/zRICGao/ZRIC-AI-TRPG-Engine.git
+cd ZRIC-AI-TRPG-Engine
 pip install -r requirements.txt
 ```
 
-### 配置 API Key
+**配置 API Key**
 
 ```bash
 cp .env.example .env
@@ -65,17 +89,13 @@ ANTHROPIC_API_KEY=sk-ant-你的key
 DOUBAO_API_KEY=你的豆包key
 ```
 
-API Key 获取：
-- DeepSeek：https://platform.deepseek.com/
-- 硅基流动：https://cloud.siliconflow.cn/
-- Anthropic：https://console.anthropic.com/
-- 豆包（火山方舟）：https://console.volcengine.com/ark
-
-### 启动
+**启动**
 
 ```bash
 python main.py
 ```
+
+---
 
 浏览器会自动打开 `http://127.0.0.1:8000`。如果没有自动打开，手动访问该地址。
 
